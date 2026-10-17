@@ -7,7 +7,7 @@ Compatibility remains defined by the plugin's `package.json` engine ranges.
 
 ## Add and install
 
-In **Settings → Marketplaces**, paste one of these into **Marketplace source**:
+In **Settings → Plugin marketplaces**, paste one of these into **Marketplace source**:
 
 ```text
 https://raw.githubusercontent.com/dpolishuk/bb-zcode/main/marketplace.json

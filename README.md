@@ -53,7 +53,7 @@ with a personal API provider configured. Start bb before installing the plugin.
 
 ### Install from bb's marketplace
 
-Open **Settings → Marketplaces**, paste this into **Marketplace source**, and
+Open **Settings → Plugin marketplaces**, paste this into **Marketplace source**, and
 click **Add**:
 
 ```text

@@ -10,7 +10,12 @@
       "displayName": "ZCode [Experimental]",
       "description": "Run local ZCode sessions with streaming replies, tool activity, approvals, and resume.",
       "icon": "Terminal",
-      "tags": ["coding", "provider", "zcode", "local"],
+      "tags": [
+        "coding",
+        "provider",
+        "zcode",
+        "local"
+      ],
       "author": {
         "name": "Dmitry Polishuk",
         "github": "dpolishuk",

@@ -1,5 +1,4 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { format } from "prettier";
 
 const root = new URL("../", import.meta.url);
 const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
@@ -35,7 +34,7 @@ const catalog = {
   ],
 };
 const file = new URL("marketplace.json", root);
-const expected = await format(JSON.stringify(catalog), { parser: "json" });
+const expected = `${JSON.stringify(catalog, null, 2)}\n`;
 if (process.argv.includes("--check")) {
   if ((await readFile(file, "utf8")) !== expected) {
     throw new Error(

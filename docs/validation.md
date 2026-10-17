@@ -1,7 +1,8 @@
 # Validation record
 
-Verified locally on 2026-10-17, macOS. The checks below concern the source
-checkout and an isolated bb installation, not a marketplace release.
+Verified locally on 2026-10-17, macOS. The checks below cover the source
+checkout, an isolated real-CLI smoke, and installation from the published
+marketplace. Model connectivity remains a separate verification boundary.
 
 ## Versions and contracts
 
@@ -109,6 +110,44 @@ port was listening afterward. Retained temporary directories are evidence only.
   and skill roots are outside this version's supported scope.
 - ZCode's source labels this session API legacy. A future CLI update may require
   adapting to its newer desktop protocol.
-- The plugin was installed in an isolated test instance. Publishing the source
-  repository does not establish npm-package, marketplace, or tagged-release
-  installation evidence.
+- No npm package or tagged-release installation has been verified.
+
+## RUNTIME_VERIFIED: published native marketplace
+
+On 2026-10-17, a fresh isolated bb 0.46.1 server/daemon accepted the published
+Git source `git:https://github.com/dpolishuk/bb-zcode.git@main`, resolved commit
+`20634f1da5c6a94b62c51c8b8f65c3ca68b51e3b`, and reported one catalog entry with
+no refresh error.
+
+After removing that test catalog, the HTTPS source was added through bb's
+**Settings → Plugin marketplaces** UI:
+
+```text
+https://raw.githubusercontent.com/dpolishuk/bb-zcode/main/marketplace.json
+```
+
+Native search reported `zcode@bb-zcode` as compatible, with its author,
+overview, and resolved Git source. Running `bb plugin install zcode@bb-zcode`
+through the native CLI downloaded and built the published commit into bb's
+managed cache. The result reported:
+
+```json
+{
+  "id": "zcode",
+  "version": "0.1.0",
+  "provenance": "catalog",
+  "catalogEntryId": "zcode",
+  "catalogMarketplaceName": "bb-zcode",
+  "enabled": true,
+  "status": "running",
+  "providerIds": ["zcode"]
+}
+```
+
+The ordinary repository-page URL was also tested and rejected with HTTP 422:
+GitHub page data is not a bb marketplace manifest. This confirms the need for
+the raw manifest URL or `git:` form on bb 0.46.1.
+
+These are published-source catalog and managed-install checks. They do not
+change the model-authentication limits documented above, and they did not
+install or reconfigure the user's normal bb profile.
