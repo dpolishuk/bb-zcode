@@ -21,6 +21,8 @@ bb's CLI. On a machine without the desktop app, install the pinned builder with
 - Keep plugin code on the published SDK's public import surfaces.
 - Add focused tests for protocol translation, lifecycle, or approval changes.
 - Keep unsupported capabilities explicit in the declaration and documentation.
+- After changing store text or package branding, run `npm run marketplace:build`
+  to update the committed native catalog.
 - Run `npm run check` and `npm run format:check` before opening a pull request.
 - Explain the problem, the changed behavior, and the checks you ran.
 

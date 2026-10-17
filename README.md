@@ -51,6 +51,43 @@ ZCode's configuration; the plugin has no API-key settings.
 You'll need **bb 0.46.1**, **Node.js 24+**, and a local **ZCode** installation
 with a personal API provider configured. Start bb before installing the plugin.
 
+### Install from bb's marketplace
+
+Open **Settings → Marketplaces**, paste this into **Marketplace source**, and
+click **Add**:
+
+```text
+https://raw.githubusercontent.com/dpolishuk/bb-zcode/main/marketplace.json
+```
+
+In bb's plugin store, search for **ZCode**, open the entry from **ZCode for bb**,
+and click **Install**. bb downloads, builds, and manages the plugin for you.
+Adding the marketplace alone does not install a plugin.
+
+You can also paste this Git source into the same field:
+
+```text
+git:https://github.com/dpolishuk/bb-zcode.git@main
+```
+
+The plain `https://github.com/dpolishuk/bb-zcode` repository page is not a
+marketplace manifest; bb 0.46.1 requires the raw JSON URL or `git:` source above.
+
+With the bb CLI on PATH, the equivalent is:
+
+```sh
+bb marketplace add git:https://github.com/dpolishuk/bb-zcode.git@main
+bb plugin install zcode@bb-zcode
+```
+
+The catalog and plugin track `main`. Use bb's native update controls or
+`bb plugin update zcode` to install later compatible changes. See
+[marketplace details](docs/marketplace.md) for refresh and verification.
+
+### Install from a checkout
+
+For local development:
+
 ```sh
 git clone https://github.com/dpolishuk/bb-zcode.git
 cd bb-zcode
@@ -136,6 +173,10 @@ npm run test:live     # Installed ZCode CLI + isolated loopback model
 The live test uses an isolated HOME and synthetic provider configuration. It
 does not use your model credentials. CI runs the static checks and synthetic
 test suite; the native CLI smoke is opt-in.
+
+`marketplace.json` is generated from the package branding and
+`PLUGIN_OVERVIEW.md`. Run `npm run marketplace:build` after changing either;
+CI checks that the committed catalog stays in sync.
 
 Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [configuration guide](docs/configuration.md).
