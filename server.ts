@@ -50,9 +50,9 @@ export default async function plugin(bb: BbPluginApi) {
       icon: "Terminal",
       strings: {
         signInHint:
-          "Configure a personal API provider in ZCode on this machine. Subscription-plan login is not supported yet.",
+          "Sign in to individual Coding Plan in ZCode Desktop on this machine, or configure a personal API provider.",
         expiredHint:
-          "Check your personal provider credentials in ZCode, then retry.",
+          "Reconnect Coding Plan or check your personal API credentials in ZCode, then start a new session.",
         installUrl: "https://github.com/zai-org/ZCode",
         planModeCopy: "ZCode will inspect the workspace and prepare a plan.",
       },
@@ -85,9 +85,10 @@ export default async function plugin(bb: BbPluginApi) {
         fallback: [
           {
             id: "zcode-default",
-            displayName: "ZCode configured model",
+            displayName: "ZCode models unavailable",
             isDefault: true,
-            description: "Use the model configured in ZCode.",
+            description:
+              "Open ZCode on this machine, check the selected provider, then refresh the model list.",
             supportedReasoningEfforts: [
               {
                 reasoningEffort: "none",

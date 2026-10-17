@@ -27,9 +27,10 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((close) => close()));
 });
-function harness() {
+function harness(extra: Parameters<typeof createBridge>[0] = {}) {
   const messages: Record<string, unknown>[] = [];
   const bridge = createBridge({
+    ...extra,
     write: (message) => messages.push(message),
     env: {
       ...process.env,
@@ -136,6 +137,33 @@ it("does not acknowledge a rejected input or invent a turn", async () => {
       .deltas()
       .some((d) => d.kind === "turn.open" || d.kind === "input.accepted"),
   ).toBe(false);
+});
+
+it("keeps personal API sessions usable when Coding Plan is unavailable", async () => {
+  const h = harness({
+    accountFactory: () => ({
+      async initialize() {
+        throw new Error("ZCode Coding Plan: subscription unavailable.");
+      },
+      async authorize() {
+        return { headersApplied: false };
+      },
+      close() {},
+    }),
+  });
+  const providerThreadId = await h.start();
+  const reply = await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghij",
+    input: [{ type: "text", text: "hello", mentions: [] }],
+  });
+  expect(reply.error).toBeUndefined();
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(h.deltas().find((d) => d.kind === "turn.boundary")?.status).toBe(
+    "completed",
+  );
 });
 
 it.each(["allow_once", "deny"])(

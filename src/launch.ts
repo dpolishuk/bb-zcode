@@ -60,6 +60,25 @@ export function resolveLaunch(
       childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config;
     }
   }
+  const desktopCatalog =
+    "/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json";
+  if (
+    process.platform === "darwin" &&
+    !explicit &&
+    !childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE &&
+    existsSync(desktopCatalog)
+  )
+    childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = desktopCatalog;
+  // Both paths must be explicit: otherwise the CLI substitutes a cache path,
+  // changing the builtin revision against which account overlays are checked.
+  if (childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) {
+    childEnv.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE ||= join(
+      childEnv.ZCODE_DATA_BASE_DIR || childEnv.HOME || homedir(),
+      ".zcode",
+      "v2",
+      "provider_config.json",
+    );
+  }
   return {
     command: isScript
       ? env.BB_ZCODE_NODE_EXECUTABLE || options.nodeExecutable

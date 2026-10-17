@@ -37,12 +37,15 @@ import {
   type Snapshot,
 } from "./protocol.js";
 import { Timeline, toolPresentation } from "./timeline.js";
+import { CodingPlanHost, type AccountHost } from "./coding-plan.js";
 
 type Message = Record<string, unknown>;
 type Session = {
   threadId: string;
   providerThreadId: string;
   client: ZCodeConnection;
+  account: AccountHost;
+  accountError?: string;
   cwd: string;
   timeline?: Timeline;
   starting: boolean;
@@ -83,6 +86,7 @@ export function createBridge(
     write?: (message: Message) => void;
     clientFactory?: ClientFactory;
     env?: NodeJS.ProcessEnv;
+    accountFactory?: (launch: LaunchSpec) => AccountHost;
   } = {},
 ) {
   const write =
@@ -98,6 +102,7 @@ export function createBridge(
   const constructing = new Set<string>();
   const startingClients = new Map<string, ZCodeConnection>();
   const clients = new Set<ZCodeConnection>();
+  const accounts = new Map<ZCodeConnection, AccountHost>();
   const interactions = new Map<
     string,
     {
@@ -115,6 +120,18 @@ export function createBridge(
     write({ jsonrpc: "2.0", id, result: value });
   const error = (id: unknown, code: number, message: string) =>
     write({ jsonrpc: "2.0", id, error: { code, message } });
+
+  async function prepareAccount(account: AccountHost, client: ZCodeConnection) {
+    try {
+      await account.initialize(client);
+    } catch (failure) {
+      account.close();
+      // An expired subscription must not hide unrelated personal API models.
+      return failure instanceof Error
+        ? failure.message
+        : "ZCode Coding Plan is unavailable.";
+    }
+  }
 
   function settle(
     session: Session,
@@ -219,10 +236,11 @@ export function createBridge(
     if (method === "session/requestRuntimePreferences")
       return RUNTIME_PREFERENCES;
     if (method === "interaction/requestProviderRuntimeHeaders") {
+      if (session && !session.stopping)
+        return session.account.authorize(raw, session.providerThreadId);
       return {
         headersApplied: false,
-        errorMessage:
-          "ZCode account-plan authentication requires its desktop host. Configure a personal API provider in ZCode for this plugin.",
+        errorMessage: "No active bb session for ZCode account authentication.",
       };
     }
     if (!session || session.stopping)
@@ -342,6 +360,7 @@ export function createBridge(
 
   async function release(session: Session, interrupt: boolean) {
     session.stopping = true;
+    session.account.close();
     if (interrupt && session.timeline) {
       try {
         await session.client.request(
@@ -356,6 +375,7 @@ export function createBridge(
     settle(session, interrupt ? "interrupted" : "failed");
     await session.client.close();
     clients.delete(session.client);
+    accounts.delete(session.client);
     sessions.delete(session.threadId);
     emit(session, [{ kind: "session.ended" }]);
   }
@@ -371,11 +391,13 @@ export function createBridge(
     constructing.add(params.threadId);
     let session: Session | undefined;
     let client: ZCodeConnection | undefined;
+    let account: AccountHost | undefined;
     try {
       const launch = resolveLaunch(params.options.providerOptions, {
         ...(config.env ?? process.env),
         ...params.options.envVars,
       });
+      account = config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
       client = factory(
         launch,
         params.cwd,
@@ -385,6 +407,7 @@ export function createBridge(
           },
           request: (method, raw) => reverseRequest(session, method, raw),
           exit: (failure) => {
+            account?.close();
             if (session && !session.stopping) {
               settle(session, "failed", failure.message);
               sessions.delete(session.threadId);
@@ -395,7 +418,9 @@ export function createBridge(
         params.threadId,
       );
       clients.add(client);
+      accounts.set(client, account);
       startingClients.set(params.threadId, client);
+      const accountError = await prepareAccount(account, client);
       const mode = modeFor(params.options);
       const response = await client.request(
         resume ? "session/resume" : "session/create",
@@ -418,6 +443,13 @@ export function createBridge(
         },
       );
       const snapshot = snapshotSchema.parse(response);
+      if (
+        accountError &&
+        !snapshot.settings.model.available.some(
+          (model) => !model.disabledReason,
+        )
+      )
+        throw new Error(accountError);
       if (closed) throw new Error("Bridge is closed.");
       if (
         resume &&
@@ -429,6 +461,8 @@ export function createBridge(
         threadId: params.threadId,
         providerThreadId: snapshot.session.sessionId,
         client,
+        account,
+        accountError,
         cwd: params.cwd,
         mode,
         starting: false,
@@ -461,9 +495,11 @@ export function createBridge(
       emit(session, [{ kind: "session.reset" }]);
       return session;
     } catch (failure) {
+      account?.close();
       if (client) {
         await client.close();
         clients.delete(client);
+        accounts.delete(client);
       }
       throw failure;
     } finally {
@@ -508,6 +544,11 @@ export function createBridge(
         options.model,
         options.reasoningLevel,
       );
+      if (
+        session.accountError &&
+        modelSelection?.providerId.startsWith("account:")
+      )
+        throw new Error(session.accountError);
       const response = record(
         await session.client.request("session/send", {
           sessionId: session.providerThreadId,
@@ -549,19 +590,25 @@ export function createBridge(
       raw.providerOptions,
       config.env ?? process.env,
     );
+    const account =
+      config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
     const client = factory(
       launch,
       cwd,
       {
         notification() {},
         request: (method, params) => reverseRequest(undefined, method, params),
-        exit() {},
+        exit() {
+          account.close();
+        },
       },
       null,
     );
     clients.add(client);
+    accounts.set(client, account);
     try {
-      return snapshotSchema.parse(
+      const accountError = await prepareAccount(account, client);
+      const snapshot = snapshotSchema.parse(
         await client.request("session/create", {
           workspace: workspaceRef(cwd),
           mode: "build",
@@ -569,9 +616,19 @@ export function createBridge(
           titleGenerationEnabled: false,
         }),
       );
+      if (
+        accountError &&
+        !snapshot.settings.model.available.some(
+          (model) => !model.disabledReason,
+        )
+      )
+        throw new Error(accountError);
+      return snapshot;
     } finally {
+      account.close();
       await client.close();
       clients.delete(client);
+      accounts.delete(client);
     }
   }
 
@@ -715,6 +772,7 @@ export function createBridge(
       if (method === "thread/stop" || method === "thread/discard") {
         const starting = startingClients.get(p.threadId);
         if (starting) {
+          accounts.get(starting)?.close();
           await starting.close();
           clients.delete(starting);
         }
@@ -782,6 +840,7 @@ export function createBridge(
   }
   async function close() {
     closed = true;
+    for (const account of accounts.values()) account.close();
     await Promise.allSettled(
       [...sessions.values()].map((session) => release(session, true)),
     );

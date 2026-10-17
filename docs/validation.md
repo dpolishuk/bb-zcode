@@ -28,7 +28,7 @@ build, were used for the runtime checks.
 
 ## CONFIG_VALIDATED
 
-`npm run check` runs TypeScript checking, 20 automated tests, and bb's plugin
+`npm run check` runs TypeScript checking, 45 automated tests, and bb's plugin
 builder. The suite covers:
 
 - The published SDK's bridge conformance suite and public-SDK-only import scan.
@@ -101,9 +101,8 @@ port was listening afterward. Retained temporary directories are evidence only.
 
 - Personal provider authentication, paid model connectivity, and real coding
   tool execution have not been exercised against a production model.
-- ZCode subscription-plan authentication is not implemented. The CLI asks its
-  desktop host for signed runtime headers; the adapter reports that limitation
-  explicitly and does not copy desktop credentials.
+- Individual Coding Plan account discovery is verified as described below;
+  paid inference, Start Plan, and Team-plan authentication are not verified.
 - Real native approval prompts are covered by synthetic protocol fixtures, not
   the live model fixture. Live mode changes were verified.
 - Attachments, live steering, forks, manual compaction, and bb-injected tools
@@ -111,6 +110,35 @@ port was listening afterward. Retained temporary directories are evidence only.
 - ZCode's source labels this session API legacy. A future CLI update may require
   adapting to its newer desktop protocol.
 - No npm package or tagged-release installation has been verified.
+
+## v0.2.0: individual Coding Plan and reasoning
+
+On 2026-10-18, the installed macOS ZCode CLI 0.16.9 completed account discovery
+using the existing encrypted Z.ai Desktop sign-in. The plugin successfully
+resolved a short-lived project token, verified the active subscription, pushed
+the account overlay, and received GLM-5.3 and GLM-5.3-Flash with `low`, `high`,
+and `max` reasoning (`max` as the native default). No production model prompt
+was sent. BigModel's corresponding API flow is covered by fixtures only.
+
+The 45-test suite includes encrypted credentials, fixed endpoint/header rules,
+token expiry and rejection, concurrent refresh, cancellation, logout/account
+switches, session/provider/model/scope mismatches, missing keys, invalid
+subscriptions, oversized/failed responses, safe diagnostics, and continued
+personal-provider operation when account initialization fails.
+
+`npm run test:live` also runs a real native Coding Plan session against a
+synthetic account API and HTTPS loopback inference endpoint. It verifies the
+account overlay, runtime-auth reverse RPC, credential delivery, native effort
+selection, and streamed completion. OpenSSL is required to create the fixture's
+temporary TLS certificate; only the test child trusts that certificate.
+The synthetic signing endpoint returns HTTP 503, exercising ZCode's own
+unsigned fallback. This does **not** verify production gateway signatures or
+paid inference. No production credentials enter this fixture.
+
+The local runtime run observed efforts `disabled`, `high`, `high` across the
+direct CLI, personal-provider bridge, and Coding Plan bridge turns. One account
+authorization and one authenticated model request completed. Raw child-I/O
+recording is disabled in the plugin to keep auth responses out of bb traces.
 
 ## RUNTIME_VERIFIED: published native marketplace
 

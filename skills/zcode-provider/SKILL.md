@@ -13,8 +13,10 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
   execution host; set `nodeExecutable` when the bundle needs an explicit Node 24+
   runtime. `args` is a JSON array; no shell interpolation occurs.
 - Configure API credentials in ZCode, never in plugin settings or prompts.
-  This version supports personal API providers. Subscription-plan models need a
-  desktop-owned authentication callback that this plugin does not implement.
+  This version supports personal API providers and individual Coding Plan
+  through the existing ZCode Desktop sign-in on the same machine and OS user.
+  Open Coding Plan once in ZCode to prepare its project key. Start Plan,
+  Team plans, and standalone CLI-only login are not supported.
 - Native permission and question prompts are answered through bb. The plugin
   does not provide an OS sandbox, and does not grant persistent permission rules.
 - Text prompts, streaming, tools, interruption, and durable resume are supported.

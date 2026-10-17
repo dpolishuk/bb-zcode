@@ -3,7 +3,6 @@ import type { ChildProcess } from "node:child_process";
 import {
   experimental_spawnPortableProcess,
   experimental_killPortableProcess,
-  experimental_recordProviderChildIo,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { z } from "zod";
 import type { LaunchSpec } from "./launch.js";
@@ -65,7 +64,7 @@ export class ZCodeClient implements ZCodeConnection {
     launch: LaunchSpec,
     cwd: string,
     private callbacks: ClientCallbacks,
-    threadId: string | null = null,
+    _threadId: string | null = null,
   ) {
     this.child = experimental_spawnPortableProcess({
       ...launch,
@@ -73,7 +72,8 @@ export class ZCodeClient implements ZCodeConnection {
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
-    experimental_recordProviderChildIo(this.child, { threadId });
+    // Reverse RPC replies can contain short-lived account credentials. Never
+    // attach bb's raw child-I/O recorder to this transport.
     this.child.stdout!.on("data", (chunk: Buffer) => this.receive(chunk));
     this.child.stderr!.on("data", () => {
       /* drain diagnostics; never forward credentials or unbounded logs */

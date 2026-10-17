@@ -29,8 +29,9 @@ follow its work, and return to the same conversation later. The plugin runs
 your installed ZCode CLI and uses its existing provider configuration.
 
 > [!NOTE]
-> This version supports **personal API providers configured in ZCode**.
-> ZCode subscription/account-plan authentication is not supported yet.
+> Supports **individual Coding Plan sign-in in ZCode Desktop** (Z.ai / BigModel)
+> and **personal API providers configured in ZCode**. Start Plan and Team plans
+> are not supported yet.
 
 ## Features
 
@@ -43,13 +44,15 @@ your installed ZCode CLI and uses its existing provider configuration.
 | **Model discovery**    | Choose from ZCode's models and reasoning options.      |
 | **Plan mode**          | Ask ZCode to inspect the workspace and prepare a plan. |
 
-Each thread runs its own supervised ZCode process. API credentials stay in
-ZCode's configuration; the plugin has no API-key settings.
+Each thread runs its own supervised ZCode process. The plugin reads ZCode's
+existing sign-in and keeps short-lived Coding Plan credentials in memory;
+there are no API-key settings to fill in or credentials to paste into bb.
 
 ## Quick start
 
 You'll need **bb 0.46.1**, **Node.js 24+**, and a local **ZCode** installation
-with a personal API provider configured. Start bb before installing the plugin.
+with individual Coding Plan connected in ZCode Desktop or a personal API provider
+configured. Start bb before installing the plugin.
 
 ### Install from bb's marketplace
 
@@ -97,6 +100,20 @@ node scripts/bb.mjs plugin install . --yes
 ```
 
 Open a new bb thread, select **ZCode**, choose a model, and send a prompt.
+
+### Updating for Coding Plan support
+
+On the machine running bb, sign in to ZCode Desktop and open **Coding Plan**
+once, then update the plugin and open a new bb thread:
+
+```sh
+bb plugin update zcode --yes
+bb provider models zcode --json
+```
+
+The list should contain actual model names and their supported effort choices.
+For example, the verified ZCode catalog exposes GLM-5.3 / GLM-5.3-Flash with
+`low`, `high`, and `max`. Choices follow your installed ZCode catalog.
 
 The installer helper uses bb's installed macOS app CLI, or `bb` on PATH on
 other systems. The provider finds `zcode` on PATH, then tries the CLI bundled

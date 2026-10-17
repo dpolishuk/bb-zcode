@@ -67,3 +67,16 @@ it("only imports public SDK surfaces and declared dependencies", async () => {
   expect(scan.violations).toEqual([]);
   expect(scan.privateDependencies).toEqual([]);
 });
+
+it("pins both provider paths so account overlays use the CLI's builtin revision", () => {
+  const launch = resolveLaunch(
+    { executable: "/custom/zcode.cjs" },
+    {
+      ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: "/custom/builtin.json",
+      ZCODE_DATA_BASE_DIR: "/isolated",
+    },
+  );
+  expect(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE).toBe(
+    "/isolated/.zcode/v2/provider_config.json",
+  );
+});

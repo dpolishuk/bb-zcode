@@ -102,9 +102,10 @@ export function selectedModel(model: string | undefined, reasoning?: string) {
 export const DEFAULT_MODEL = {
   id: "zcode-default",
   model: "zcode-default",
-  displayName: "ZCode configured model",
+  displayName: "ZCode models unavailable",
   isDefault: true,
-  description: "Use the model configured in ZCode.",
+  description:
+    "Open ZCode on this machine, check the selected provider, then refresh the model list.",
   supportedReasoningEfforts: [
     { reasoningEffort: "none", description: "Use ZCode model defaults." },
   ],

@@ -8,16 +8,21 @@ import { ZCodeClient, ProtocolError } from "../src/client.js";
 import { resolveLaunch, workspaceRef } from "../src/launch.js";
 import { RUNTIME_PREFERENCES, record } from "../src/protocol.js";
 import { createBridge } from "../src/bridge.js";
+import { smokeCodingPlan } from "./smoke-coding-plan.js";
 
 // Opt-in real CLI test against a deterministic loopback model, with no credentials.
 const root = mkdtempSync(join(tmpdir(), "bb-zcode-live-"));
 const cwd = join(root, "workspace");
 mkdirSync(cwd);
 let modelRequests = 0;
+const receivedEfforts: string[] = [];
 const modelServer = createServer(async (request, response) => {
-  for await (const _chunk of request) {
-    /* drain; never record model input */
-  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  // Keep only the selected effort, never model input or credentials.
+  const body = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+  const effort = record(body.output_config).effort;
+  if (typeof effort === "string") receivedEfforts.push(effort);
   modelRequests++;
   response.writeHead(200, { "content-type": "text/event-stream" });
   const event = (type: string, data: unknown) =>
@@ -112,7 +117,10 @@ writeFileSync(
                 supportsMidConversationSystem: false,
               },
               optionSpecs: {
-                reasoningLevel: { values: ["disabled"], map: "{}" },
+                reasoningLevel: {
+                  values: ["disabled", "low", "medium", "high"],
+                  map: '{"output_config": {"effort": reasoningLevel}}',
+                },
                 maxOutputTokens: {
                   max: 4096,
                   map: "{'max_tokens': maxOutputTokens}",
@@ -263,8 +271,24 @@ try {
     approvalReviewer: null,
     permissionEscalation: null,
     model: "bb-smoke/fixture",
+    reasoningLevel: "high",
   };
   try {
+    const catalog = await rpc("model/list", { cwd });
+    const discovered = (catalog.models as Array<Record<string, unknown>>).find(
+      (entry) => entry.model === "bb-smoke/fixture",
+    );
+    if (
+      JSON.stringify(discovered?.supportedReasoningEfforts) !==
+      JSON.stringify(
+        ["disabled", "low", "medium", "high"].map((level) => ({
+          reasoningEffort: level,
+          label: level,
+          description: "",
+        })),
+      )
+    )
+      throw new Error("Bridge did not expose every native reasoning effort.");
     const start = await rpc("thread/start", {
       threadId: "live-smoke",
       cwd,
@@ -306,6 +330,8 @@ try {
         .join("") !== "Hello from the local fixture."
     )
       throw new Error("Bridge did not forward streamed text.");
+    if (receivedEfforts.at(-1) !== "high")
+      throw new Error("Selected high effort did not reach the model API.");
     await rpc("thread/stop", {
       threadId: "live-smoke",
       providerThreadId: start.providerThreadId,
@@ -324,6 +350,9 @@ try {
   } finally {
     await bridge.close();
   }
+  const codingPlan = await smokeCodingPlan(builtinFile, env);
+  if (receivedEfforts.at(-1) !== "high")
+    throw new Error("Coding Plan effort did not reach the model API.");
   let bbThreadVerified = false;
   // Point this ONLY at a disposable bb instance. Ordinary runs do not install or reconfigure bb.
   if (process.env.BB_SMOKE_SERVER_URL) {
@@ -375,7 +404,14 @@ try {
     const models = await cli("provider", "models", "zcode", "--json");
     if (
       !Array.isArray(models) ||
-      !models.some((m) => m.model === "bb-smoke/fixture")
+      !models.some(
+        (m) =>
+          m.model === "bb-smoke/fixture" &&
+          m.supportedReasoningEfforts.some(
+            (level: { reasoningEffort: string }) =>
+              level.reasoningEffort === "low",
+          ),
+      )
     )
       throw new Error("bb did not receive the native model catalog.");
     const project = await cli(
@@ -396,6 +432,8 @@ try {
       "zcode",
       "--model",
       "bb-smoke/fixture",
+      "--reasoning-level",
+      "low",
       "--environment",
       cwd,
       "--permission-mode",
@@ -422,6 +460,8 @@ try {
       throw new Error(
         `bb did not retain the fixture output: ${JSON.stringify(output)}`,
       );
+    if (receivedEfforts.at(-1) !== "low")
+      throw new Error("bb's selected low effort did not reach the model API.");
     bbThreadVerified = true;
   }
   console.log(
@@ -440,6 +480,8 @@ try {
         bridgeChecks: [
           "text prompt",
           "native default reasoning",
+          "native effort catalog",
+          "selected high effort reaches model API",
           "bb streamed deltas",
           "empty-session durability",
           "release",
@@ -450,6 +492,8 @@ try {
           (record(record(created.settings).model).available as unknown[])
             ?.length ?? 0,
         modelRequests,
+        receivedEfforts,
+        codingPlan,
         bbThreadVerified,
         modelBackend: "synthetic loopback fixture",
         realProviderAuthenticationTested: false,
