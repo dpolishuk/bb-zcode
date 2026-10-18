@@ -4,7 +4,7 @@ import { homedir, platform, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { ZCodeConnection } from "./client.js";
-import type { LaunchSpec } from "./launch.js";
+import { workspaceRef, type LaunchSpec } from "./launch.js";
 import { record, text } from "./protocol.js";
 
 const hash = (value: string) =>
@@ -30,7 +30,12 @@ const tokenSchema = z.object({
   expiresAt: z.number().finite().positive(),
 });
 type Provider = z.infer<typeof providerSchema>;
-type Login = { family: "zai" | "bigmodel"; token: string; fingerprint: string };
+type Login = {
+  family: "zai" | "bigmodel";
+  token: string;
+  fingerprint: string;
+  zcodeJwt?: string;
+};
 type Material = { token: string; apiKeyId: string; expires: number };
 
 // Only our own errors may leave this module. API bodies and credential parser
@@ -52,6 +57,7 @@ async function readObject(path: string, optional = false) {
 export interface AccountHost {
   initialize(client: ZCodeConnection): Promise<void>;
   authorize(raw: unknown, sessionId: string): Promise<unknown>;
+  authorizeOfficialMcp?(raw: unknown, cwd: string): Promise<unknown>;
   close(): void;
 }
 
@@ -131,10 +137,14 @@ export class CodingPlanHost implements AccountHost {
     if (!token) return;
     // Include the saved identity as well as the login generation in the binding.
     const identity = get(`oauth:${family}:user_info`);
+    const zcodeJwt = get("zcodejwttoken")
+      .trim()
+      .replace(/^Bearer\s+/i, "");
     return {
       family,
       token,
-      fingerprint: hash(JSON.stringify([family, token, identity])),
+      fingerprint: hash(JSON.stringify([family, token, identity, zcodeJwt])),
+      zcodeJwt: zcodeJwt || undefined,
     };
   }
 
@@ -424,6 +434,55 @@ export class CodingPlanHost implements AccountHost {
             ? error.message
             : "ZCode Coding Plan authentication failed.",
       };
+    }
+  }
+
+  async authorizeOfficialMcp(raw: unknown, cwd: string) {
+    const p = record(raw);
+    // Validate the destination before loading any identity material. This is
+    // ZCode's official MCP origin, distinct from its model/account API origins.
+    try {
+      const origin = new URL(text(p.targetOrigin));
+      if (
+        origin.protocol !== "https:" ||
+        origin.username ||
+        origin.password ||
+        origin.origin !== "https://zcode.z.ai" ||
+        origin.pathname !== "/" ||
+        origin.search ||
+        origin.hash
+      )
+        return { ok: false, reason: "official_mcp_origin_untrusted" };
+    } catch {
+      return { ok: false, reason: "official_mcp_origin_untrusted" };
+    }
+    const workspace = record(p.workspace),
+      expected = workspaceRef(cwd);
+    if (
+      !text(p.requestId) ||
+      !text(p.pluginId) ||
+      !text(p.mcpKey) ||
+      workspace.workspaceKey !== expected.workspaceKey ||
+      workspace.workspacePath !== expected.workspacePath
+    )
+      return { ok: false, reason: "official_auth_unavailable" };
+    if (!this.provider)
+      return { ok: false, reason: "official_auth_plan_required" };
+    try {
+      await this.getMaterial();
+      await this.assertCurrent();
+      if (!this.login?.zcodeJwt)
+        return { ok: false, reason: "official_auth_unavailable" };
+      return {
+        ok: true,
+        headers: {
+          Authorization: `Bearer ${this.login.zcodeJwt}`,
+          "X-Bigmodel-Authorization": `Bearer ${this.login.token}`,
+          "Bigmodel-Target-Type": "PERSONAL",
+        },
+      };
+    } catch {
+      return { ok: false, reason: "official_auth_unavailable" };
     }
   }
 

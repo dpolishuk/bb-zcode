@@ -38,6 +38,9 @@ import {
 } from "./protocol.js";
 import { Timeline, toolPresentation } from "./timeline.js";
 import { CodingPlanHost, type AccountHost } from "./coding-plan.js";
+import { nativeInput } from "./input.js";
+import { Usage } from "./usage.js";
+import { runtimeSettings } from "./settings.js";
 
 type Message = Record<string, unknown>;
 type Session = {
@@ -56,6 +59,12 @@ type Session = {
   mode: string;
   restorable: boolean;
   snapshot: Snapshot;
+  usage: Usage;
+  activeTurnId?: string;
+  compacting: boolean;
+  draining: boolean;
+  queue: Array<z.infer<typeof turnSteerParamsSchema>>;
+  accepted: Set<string>;
 };
 type ClientFactory = (
   launch: LaunchSpec,
@@ -118,8 +127,12 @@ export function createBridge(
     notify("thread/delta", { threadId: session.threadId, deltas });
   const result = (id: unknown, value: unknown) =>
     write({ jsonrpc: "2.0", id, result: value });
-  const error = (id: unknown, code: number, message: string) =>
-    write({ jsonrpc: "2.0", id, error: { code, message } });
+  const error = (id: unknown, code: number, message: string, data?: unknown) =>
+    write({
+      jsonrpc: "2.0",
+      id,
+      error: { code, message, ...(data ? { data } : {}) },
+    });
 
   async function prepareAccount(account: AccountHost, client: ZCodeConnection) {
     try {
@@ -140,6 +153,8 @@ export function createBridge(
   ) {
     const timeline = session.timeline;
     session.timeline = undefined;
+    session.activeTurnId = undefined;
+    session.compacting = false;
     timeline?.finish(status, response);
     for (const [id, pending] of interactions)
       if (pending.session === session) {
@@ -149,12 +164,84 @@ export function createBridge(
       }
   }
 
+  async function finishTurn(
+    session: Session,
+    status: "completed" | "failed" | "interrupted",
+    payload: Message,
+  ) {
+    if (!session.timeline || session.draining) return;
+    session.draining = true;
+    try {
+      const window = record(session.snapshot.projection).contextWindow;
+      emit(
+        session,
+        session.usage.turn(
+          payload.usage,
+          typeof window === "number" ? window : null,
+        ),
+      );
+      try {
+        const snapshot = snapshotSchema.parse(
+          await session.client.request(
+            "session/read",
+            { sessionId: session.providerThreadId },
+            2000,
+          ),
+        );
+        if (!session.stopping) {
+          session.snapshot = snapshot;
+          emit(session, session.usage.context(snapshot.projection));
+        }
+      } catch {
+        /* Usage queries must never prevent a turn from settling. */
+      }
+      if (!session.stopping) settle(session, status, text(payload.response));
+    } finally {
+      session.draining = false;
+    }
+    while (!session.stopping && !session.timeline && session.queue.length) {
+      const next = session.queue.shift()!;
+      try {
+        await send(session, next.input, next.options, next.clientRequestId);
+      } catch (failure) {
+        notify("error", {
+          threadId: session.threadId,
+          clientRequestId: next.clientRequestId,
+          message:
+            failure instanceof Error ? failure.message : "Queued prompt failed",
+        });
+      }
+    }
+  }
+
   function notification(session: Session, frame: Frame) {
     if (session.stopping) return;
     if (session.starting) {
       if (session.buffered.length >= 4096)
         throw new Error("ZCode sent too many events before accepting input.");
       session.buffered.push(frame);
+      return;
+    }
+    if (frame.method === "state.updated") {
+      const p = record(frame.params);
+      if (
+        p.sessionId === session.providerThreadId &&
+        session.compacting &&
+        [
+          "session_compacted",
+          "session_compact_failed",
+          "session_compact_cancelled",
+        ].includes(text(p.reason))
+      )
+        void finishTurn(
+          session,
+          p.reason === "session_compacted"
+            ? "completed"
+            : p.reason === "session_compact_cancelled"
+              ? "interrupted"
+              : "failed",
+          {},
+        );
       return;
     }
     if (frame.method !== "session/event") return;
@@ -166,6 +253,7 @@ export function createBridge(
       session.lastSeq = seq;
     }
     const payload = record(event.payload);
+    if (event.type === "turn.started") session.activeTurnId = event.turnId;
     if (event.type === "turn.started" && !session.restorable) {
       session.restorable = true;
       notify("thread/identity", {
@@ -179,7 +267,6 @@ export function createBridge(
       emit(session, [
         {
           kind: "turn.open",
-          ...(event.turnId ? { providerTurnId: event.turnId } : {}),
         },
       ]);
     }
@@ -191,13 +278,11 @@ export function createBridge(
           : payload.resultType === "success"
             ? "completed"
             : "failed";
-      settle(session, status, text(payload.response));
+      void finishTurn(session, status, payload);
     } else if (event.type === "turn.failed") {
-      settle(
-        session,
-        "failed",
-        `ZCode: ${text(record(payload.error).message, "Turn failed.")}`,
-      );
+      void finishTurn(session, "failed", {
+        response: `ZCode: ${text(record(payload.error).message, "Turn failed.")}`,
+      });
     } else session.timeline.event(event.type, event.payload);
   }
 
@@ -232,9 +317,19 @@ export function createBridge(
     session: Session | undefined,
     method: string,
     raw: unknown,
+    context?: {
+      account: AccountHost;
+      cwd: string;
+      preferences: typeof RUNTIME_PREFERENCES;
+    },
   ): Promise<unknown> {
     if (method === "session/requestRuntimePreferences")
-      return RUNTIME_PREFERENCES;
+      return context?.preferences ?? RUNTIME_PREFERENCES;
+    if (method === "interaction/requestOfficialMcpAuthHeaders") {
+      if (session?.stopping || !context?.account.authorizeOfficialMcp)
+        return { ok: false, reason: "official_auth_unavailable" };
+      return context.account.authorizeOfficialMcp(raw, context.cwd);
+    }
     if (method === "interaction/requestProviderRuntimeHeaders") {
       if (session && !session.stopping)
         return session.account.authorize(raw, session.providerThreadId);
@@ -360,6 +455,7 @@ export function createBridge(
 
   async function release(session: Session, interrupt: boolean) {
     session.stopping = true;
+    session.queue = [];
     session.account.close();
     if (interrupt && session.timeline) {
       try {
@@ -398,6 +494,12 @@ export function createBridge(
         ...params.options.envVars,
       });
       account = config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
+      const settings = runtimeSettings(params.options.providerOptions);
+      const context = {
+        account,
+        cwd: params.cwd,
+        preferences: settings.preferences,
+      };
       client = factory(
         launch,
         params.cwd,
@@ -405,13 +507,20 @@ export function createBridge(
           notification: (frame) => {
             if (session) notification(session, frame);
           },
-          request: (method, raw) => reverseRequest(session, method, raw),
+          request: (method, raw) =>
+            reverseRequest(session, method, raw, context),
           exit: (failure) => {
             account?.close();
             if (session && !session.stopping) {
+              session.stopping = true;
+              session.queue = [];
               settle(session, "failed", failure.message);
               sessions.delete(session.threadId);
               emit(session, [{ kind: "session.ended" }]);
+            }
+            if (client) {
+              clients.delete(client);
+              accounts.delete(client);
             }
           },
         },
@@ -437,6 +546,9 @@ export function createBridge(
                 titleGenerationEnabled: false,
               }),
           workspace: workspaceRef(params.cwd),
+          ...(settings.mcpServers.length
+            ? { mcpServers: settings.mcpServers }
+            : {}),
           ...(params.disallowedTools?.length
             ? { toolDenylist: params.disallowedTools }
             : {}),
@@ -457,6 +569,18 @@ export function createBridge(
           (params as z.infer<typeof threadResumeParamsSchema>).providerThreadId
       )
         throw new Error("ZCode resumed a different session.");
+      let restoredUsage: unknown;
+      if (resume) {
+        try {
+          restoredUsage = await client.request(
+            "session/usage",
+            { sessionId: snapshot.session.sessionId },
+            2000,
+          );
+        } catch {
+          /* Older native runtimes may not expose persisted usage. */
+        }
+      }
       session = {
         threadId: params.threadId,
         providerThreadId: snapshot.session.sessionId,
@@ -470,6 +594,11 @@ export function createBridge(
         stopping: false,
         lastSeq: -1,
         snapshot,
+        usage: new Usage(restoredUsage),
+        queue: [],
+        accepted: new Set(),
+        compacting: false,
+        draining: false,
         restorable: resume || (snapshot.projection?.turnCount ?? 0) > 0,
         instructions:
           !resume || snapshot.projection?.turnCount === 0
@@ -514,23 +643,21 @@ export function createBridge(
     options: BridgeExecutionOptions,
     clientRequestId?: string,
   ) {
-    if (session.timeline || session.starting || session.stopping)
+    if (
+      session.timeline ||
+      session.starting ||
+      session.stopping ||
+      session.draining
+    )
       throw new ProtocolError(
         "ZCode is busy. Wait for the turn to finish or stop it.",
         -32000,
       );
-    if (input.some((item) => item.type !== "text"))
-      throw new ProtocolError(
-        "This version accepts text prompts only; attachments are not supported yet.",
-        -32602,
-      );
-    const prompt = input
-      .map((item) => (item.type === "text" ? item.text : ""))
-      .join("\n");
-    if (!prompt.trim())
-      throw new ProtocolError("A text prompt is required.", -32602);
     session.starting = true;
     try {
+      const material = await nativeInput(input, session.cwd);
+      const prompt = material.content;
+      const compact = !material.attachments && prompt.trim() === "/compact";
       const mode = modeFor(options);
       if (mode !== session.mode) {
         await session.client.request("session/setMode", {
@@ -550,30 +677,50 @@ export function createBridge(
       )
         throw new Error(session.accountError);
       const response = record(
-        await session.client.request("session/send", {
-          sessionId: session.providerThreadId,
-          inputId: clientRequestId ?? randomUUID(),
-          content: session.instructions
-            ? `<bb_instructions>\n${session.instructions}\n</bb_instructions>\n\n${prompt}`
-            : prompt,
-          ...(modelSelection ? { modelSelection } : {}),
-        }),
+        await session.client.request(
+          compact ? "session/compact" : "session/send",
+          {
+            sessionId: session.providerThreadId,
+            inputId: clientRequestId ?? randomUUID(),
+            ...(!compact
+              ? {
+                  content: session.instructions
+                    ? `<bb_instructions>\n${session.instructions}\n</bb_instructions>\n\n${prompt}`
+                    : prompt,
+                  ...(material.attachments
+                    ? { attachments: material.attachments }
+                    : {}),
+                  ...(modelSelection ? { modelSelection } : {}),
+                }
+              : {}),
+          },
+        ),
       );
-      if (response.accepted !== true)
+      if (
+        compact
+          ? record(response.compact).state !== "accepted"
+          : response.accepted !== true
+      )
         throw new Error("ZCode did not accept the prompt.");
       if (session.stopping)
         throw new Error("Session stopped while submitting the prompt.");
       session.instructions = undefined;
+      if (clientRequestId) {
+        session.accepted.add(clientRequestId);
+        if (session.accepted.size > 1024)
+          session.accepted.delete(session.accepted.values().next().value!);
+      }
+      session.compacting = compact;
       session.timeline = new Timeline((deltas) => emit(session, deltas));
       const started = session.buffered.find(
         (frame) => record(frame.params).type === "turn.started",
       );
-      const turnId = text(record(started?.params).turnId);
+      session.activeTurnId = text(record(started?.params).turnId) || undefined;
       emit(session, [
         ...(clientRequestId
           ? [{ kind: "input.accepted" as const, clientRequestId }]
           : []),
-        { kind: "turn.open", ...(turnId ? { providerTurnId: turnId } : {}) },
+        { kind: "turn.open" },
       ]);
       session.starting = false;
       for (const frame of session.buffered.splice(0))
@@ -592,12 +739,18 @@ export function createBridge(
     );
     const account =
       config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
+    const settings = runtimeSettings(raw.providerOptions);
     const client = factory(
       launch,
       cwd,
       {
         notification() {},
-        request: (method, params) => reverseRequest(undefined, method, params),
+        request: (method, params) =>
+          reverseRequest(undefined, method, params, {
+            account,
+            cwd,
+            preferences: settings.preferences,
+          }),
         exit() {
           account.close();
         },
@@ -614,6 +767,9 @@ export function createBridge(
           mode: "build",
           persistence: "deferred",
           titleGenerationEnabled: false,
+          ...(settings.mcpServers.length
+            ? { mcpServers: settings.mcpServers }
+            : {}),
         }),
       );
       if (
@@ -786,6 +942,14 @@ export function createBridge(
     }
     if (p.providerThreadId !== session.providerThreadId)
       throw new ProtocolError("Provider session id mismatch.", -32602);
+    if (
+      (method === "turn/start" || method === "turn/steer") &&
+      p.clientRequestId &&
+      session.accepted.has(p.clientRequestId)
+    ) {
+      result(id, {});
+      return;
+    }
     if (method === "thread/stop" || method === "thread/discard") {
       const interrupt =
         method === "thread/discard" ||
@@ -798,10 +962,23 @@ export function createBridge(
       await release(session, interrupt);
       result(id, {});
     } else if (method === "turn/steer") {
-      throw new ProtocolError(
-        "Live steering is not supported yet. Stop the turn or wait for completion.",
-        -32000,
-      );
+      const steer = parsed.data as z.infer<typeof turnSteerParamsSchema>;
+      // bb validates expectedTurnId before dispatch. This bridge uses assembler-
+      // owned turn IDs, so only the no-active-turn race can be checked here.
+      if (!session.timeline && !session.starting) {
+        const message = "The turn targeted by this follow-up has ended.";
+        error(id, -32000, message, {
+          recovery: { kind: "staleTurn", message, retryable: false },
+        });
+        return;
+      }
+      if (session.queue.length >= 32)
+        throw new ProtocolError("The ZCode follow-up queue is full.", -32000);
+      if (
+        !session.queue.some((q) => q.clientRequestId === steer.clientRequestId)
+      )
+        session.queue.push(steer);
+      result(id, {});
     } else {
       await send(session, p.input, p.options, p.clientRequestId);
       result(id, {});

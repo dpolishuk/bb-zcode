@@ -145,10 +145,10 @@ overrides, permission modes, and troubleshooting.
 | Platform      | macOS                       |
 | CLI runtime   | Node.js 24 and 26.5.0       |
 
-**20 automated tests** cover the bridge contract, streaming, approvals,
-questions, cancellation, resume, and transport failures. An end-to-end check
-also passed through **bb → this plugin → the real ZCode CLI**, using a
-deterministic local model fixture.
+**80 automated tests** cover the bridge contract, streaming, approvals,
+questions, cancellation, resume, account authentication, and transport failures.
+An end-to-end check also passed through **bb → this plugin → the real ZCode CLI**,
+using a deterministic local model fixture.
 
 See the [validation record](docs/validation.md) for what was tested and what
 remains unverified. Personal provider authentication and production model
@@ -157,14 +157,20 @@ implemented but has not received the same live verification.
 
 ### Current scope
 
-- Tool activity appears as generic tool rows; rich diffs and usage billing are
-  not exposed yet.
-- Attachments, live steering, forks, manual compaction, and archive/rename
-  mirroring are not implemented.
-- bb-injected tools and skill-root configuration are not forwarded. ZCode's
-  native tools remain available.
+- Follow-ups queue until the running turn finishes. Images, files, token/context
+  reporting, and native manual compaction are supported.
+- MCP servers can be configured at session startup. Official MCP authentication
+  supports individual Coding Plan on the default ZCode endpoint. Native memory
+  and enhanced search are optional settings; see [configuration](docs/configuration.md).
+- Tool activity appears as generic rows. Rich diffs, cost billing, forks,
+  archive/rename mirroring, bb-injected tools, and bb skill roots remain unsupported.
+- Browser Use, interactive plugin UI, and workflow/scheduler host services need
+  further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.
   Future CLI versions may require adapter changes.
+
+See the [capability audit](docs/capability-audit.md) for the full feature matrix,
+source evidence, verification limits, and recommended implementation order.
 
 ## How it works
 
@@ -172,7 +178,7 @@ implemented but has not received the same live verification.
 flowchart LR
     BB["bb"] <-->|"Bridge v2 · deltas v3"| Plugin["bb-zcode"]
     Plugin <-->|"Native protocol v1 · stdio"| CLI["ZCode CLI"]
-    CLI <-->|"ZCode configuration"| Model["Personal API provider"]
+    CLI <-->|"ZCode configuration"| Model["Personal API / Coding Plan"]
 ```
 
 The adapter translates the two protocols, supervises child processes, and

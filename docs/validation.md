@@ -1,6 +1,6 @@
 # Validation record
 
-Verified locally on 2026-10-17, macOS. The checks below cover the source
+Verified locally on 2026-10-17 and 2026-10-18, macOS. The checks below cover the source
 checkout, an isolated real-CLI smoke, and installation from the published
 marketplace. Model connectivity remains a separate verification boundary.
 
@@ -26,9 +26,38 @@ Reference source snapshots:
 The published SDK and installed applications, rather than an assumed source
 build, were used for the runtime checks.
 
+## v0.3.0: priority capability expansion
+
+On 2026-10-18, all **80 automated tests**, TypeScript checking, formatting,
+marketplace consistency and the plugin build passed. The new tests exercise
+queued delivery, stale-turn recovery, stop/crash cancellation, replay
+deduplication, file/image inputs, bounded HTTPS images, reference preservation,
+native compaction, usage/cache accounting, cold-resume totals, saved model
+options, MCP startup configuration and official MCP credential scope.
+
+The real ZCode CLI 0.16.9 smoke also passed with isolated data and synthetic
+model/account services. It verified PNG and text-file attachments, two queued
+follow-ups, usage/context deltas, compaction completion, stdio MCP startup and
+actual MCP tool execution, release and cold resume.
+
+A fresh disposable bb 0.46.1 server/daemon installed and loaded the v0.3.0
+candidate. The full check used bb's native CLI to create a thread, submit a
+follow-up while it was running, correlate both accepted inputs and completions,
+upload an image and text file, compact the thread and read its context meter.
+The final smoke reported `bbThreadVerified: true` with 13 synthetic model
+requests. These checks used loopback ports 56392/56393 and a separate data
+directory. They did not send a production inference request.
+
+Official MCP authentication has encrypted Z.ai/BigModel credential fixtures,
+destination-origin checks, workspace isolation and logout/account-change
+coverage. Production official MCP access, custom service origins and Team plans
+remain unverified or unsupported as documented. The memory/search settings are
+validated as runtime preferences; production memory extraction/recall is not
+certified by enabling them.
+
 ## CONFIG_VALIDATED
 
-`npm run check` runs TypeScript checking, 45 automated tests, and bb's plugin
+`npm run check` runs TypeScript checking, 80 automated tests, and bb's plugin
 builder. The suite covers:
 
 - The published SDK's bridge conformance suite and public-SDK-only import scan.
@@ -105,8 +134,10 @@ port was listening afterward. Retained temporary directories are evidence only.
   paid inference, Start Plan, and Team-plan authentication are not verified.
 - Real native approval prompts are covered by synthetic protocol fixtures, not
   the live model fixture. Live mode changes were verified.
-- Attachments, live steering, forks, manual compaction, and bb-injected tools
-  and skill roots are outside this version's supported scope.
+- Forks, in-flight guidance, rich tool views, bb-injected tools/skills, browser
+  host control, interactive plugin UI, and workflow/scheduler services remain
+  outside this version's supported scope. Queued follow-ups and manual
+  compaction are supported in v0.3.0.
 - ZCode's source labels this session API legacy. A future CLI update may require
   adapting to its newer desktop protocol.
 - No npm package or tagged-release installation has been verified.

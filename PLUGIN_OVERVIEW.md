@@ -7,6 +7,9 @@ activity, approval prompts, and saved sessions you can return to later.
 - Follow ZCode tool calls and results, and answer approvals and questions.
 - Choose models and reasoning options from your ZCode configuration.
 - Plan, stop, release, and resume saved conversations.
+- Queue follow-ups, attach images and files, inspect token/context usage, and
+  request native compaction.
+- Configure native MCP servers and enable ZCode memory or enhanced search.
 
 ## Requirements
 
@@ -23,8 +26,11 @@ tokens stay in memory and raw child-protocol logging is disabled.
 
 ## Current limits
 
-Tool results use generic rows. Attachments, live steering, forks, manual
-compaction, and bb-injected tools are not implemented. Each session runs a
+Tool results use generic rows. Follow-ups queue at turn boundaries; in-flight
+guidance is not supported. Forks, bb-injected tools/skills, browser host control,
+interactive plugin UI, and workflow/scheduler services remain unsupported.
+Official MCP auth supports individual Coding Plan on the default ZCode endpoint;
+its credential flow has fixture coverage. Each session runs a
 local ZCode process with the host account's permissions; approval modes are
 not an OS sandbox.
 

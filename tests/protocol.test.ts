@@ -42,6 +42,26 @@ it("preserves slashes in native model ids and rejects ambiguous ids", () => {
   });
   expect(() => selectedModel("unqualified")).toThrow("providerId/modelId");
 });
+
+it("preserves saved native model options when changing reasoning", () => {
+  const current = {
+    ...snapshot,
+    settings: {
+      model: {
+        ...snapshot.settings.model,
+        current: {
+          providerId: "api",
+          modelId: "model",
+          options: { reasoningLevel: "disabled", maxOutputTokens: 8000 },
+        },
+      },
+    },
+  };
+  expect(modelForTurn(current, "api/model", "high")?.options).toEqual({
+    maxOutputTokens: 8000,
+    reasoningLevel: "high",
+  });
+});
 it("passes executable arguments as an argv array without a shell", () => {
   const launch = resolveLaunch(
     {

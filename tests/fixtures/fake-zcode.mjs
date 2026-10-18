@@ -31,7 +31,7 @@ function event(sessionId, type, payload) {
       type,
       payload,
       eventSeq: ++session.seq,
-      turnId: "native-turn",
+      turnId: `native-turn-${session.turn}`,
     },
   });
 }
@@ -44,6 +44,7 @@ function host(method, params) {
 }
 async function run(p) {
   const sessionId = p.sessionId;
+  sessions.get(sessionId).turn++;
   event(sessionId, "turn.started", { inputId: p.inputId });
   if (p.content === "hang") return;
   if (p.content === "crash") {
@@ -166,7 +167,7 @@ input.on("line", async (line) => {
       return;
     }
     writeFileSync(file, "{}");
-    sessions.set(id, { seq: 0 });
+    sessions.set(id, { seq: 0, turn: 0 });
     send({ id: m.id, result: snapshot(id) });
   } else if (m.method === "session/subscribe")
     send({

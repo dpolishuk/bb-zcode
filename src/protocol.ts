@@ -64,7 +64,16 @@ export function modelForTurn(
       m.ref.modelId === selection.modelId,
   );
   const levels = entry?.reasoning?.levels ?? [];
-  const saved = text(record(record(selection).options).reasoningLevel);
+  const current = snapshot.settings.model.current;
+  const options = {
+    ...record(record(entry?.ref).options),
+    ...(current?.providerId === selection.providerId &&
+    current?.modelId === selection.modelId
+      ? record(record(current).options)
+      : {}),
+    ...record(record(selection).options),
+  };
+  const saved = text(options.reasoningLevel);
   const level = levels.some((l) => l.value === reasoning)
     ? reasoning
     : levels.some((l) => l.value === saved)
@@ -73,7 +82,9 @@ export function modelForTurn(
   return {
     providerId: selection.providerId,
     modelId: selection.modelId,
-    ...(level ? { options: { reasoningLevel: level } } : {}),
+    ...(Object.keys(options).length || level
+      ? { options: { ...options, ...(level ? { reasoningLevel: level } : {}) } }
+      : {}),
   };
 }
 export const eventSchema = z

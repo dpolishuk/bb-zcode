@@ -2,11 +2,14 @@
 
 ## Launch settings
 
-| Setting          | Default     | Purpose                                                             |
-| ---------------- | ----------- | ------------------------------------------------------------------- |
-| `executable`     | Auto-detect | Native executable or `.cjs` / `.mjs` / `.js` CLI path               |
-| `nodeExecutable` | `node`      | Node.js 24+ executable for a JavaScript CLI bundle                  |
-| `args`           | `[]`        | JSON array of arguments before `app-server`, passed without a shell |
+| Setting                           | Default     | Purpose                                                                  |
+| --------------------------------- | ----------- | ------------------------------------------------------------------------ |
+| `executable`                      | Auto-detect | Native executable or `.cjs` / `.mjs` / `.js` CLI path                    |
+| `nodeExecutable`                  | `node`      | Node.js 24+ executable for a JavaScript CLI bundle                       |
+| `args`                            | `[]`        | JSON array of arguments before `app-server`, passed without a shell      |
+| `memoryEnabled`                   | `false`     | Allow native ZCode memory in new sessions                                |
+| `nativeSearchEnhancementsEnabled` | `false`     | Enable native enhanced find/grep in new sessions                         |
+| `mcpServers`                      | `[]`        | JSON array of native MCP server definitions; empty inherits CLI settings |
 
 Use `node scripts/bb.mjs plugin config zcode set <setting> <value>` from the
 checkout, or `bb plugin config` if the bb CLI is on PATH. Paths must exist on
@@ -62,6 +65,67 @@ Custom installations must supply `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` and
 catalog paths are passed explicitly to keep account-overlay revisions aligned.
 Standalone CLI-only login, Start Plan, and Team plans are outside this version's
 account support. Personal API providers continue to work independently.
+
+### Official MCP identity
+
+Official MCP services use a separate authentication callback. The adapter
+supports individual Coding Plan using the existing ZCode login JWT plus the
+selected family's MaaS JWT. It validates the default destination
+`https://zcode.z.ai`, exact workspace, active account and entitlement before
+returning headers. It never uses a project API key as a substitute for these
+identity headers. Custom ZCode service origins and Team plans are unsupported.
+This path has synthetic credential/bridge tests; production MCP access remains
+unverified.
+
+## Attachments, follow-ups and context
+
+Attach local images or files with bb's composer or `bb thread tell --image` /
+`--file`. Paths must be available on the execution host. Inline image data URLs
+and HTTPS images are supported up to 16 MiB; HTTPS downloads use a deadline and
+reject redirects and URL credentials. Native format/model limits still apply.
+PNG and text-file attachments have real-CLI fixture coverage; other media
+formats are delegated to ZCode and remain unverified.
+
+Follow-up messages queue in FIFO order and run after the current turn finishes.
+The queue holds up to 32 pending inputs. Stopping/releasing the session clears
+pending follow-ups; queued inputs are not persisted by the bridge across a
+process crash. bb validates expected turn identity; the bridge returns typed
+stale-turn recovery when no turn remains active. `/compact` uses the native
+compaction operation. Normal context reporting uses native estimates; billing
+cost is not fabricated.
+
+## MCP and native runtime preferences
+
+Set `memoryEnabled` or `nativeSearchEnhancementsEnabled` through bb's plugin
+settings, then start a new session. Both are off by default for compatibility.
+ZCode owns memory storage and behavior; enabling the setting is not proof that
+its extraction/recall cycle has been validated through a production model.
+
+To supply explicit MCP startup configuration, set `mcpServers` to an array:
+
+```json
+[
+  {
+    "name": "local-tools",
+    "command": "/absolute/path/to/node",
+    "args": ["/absolute/path/to/server.mjs"],
+    "env": []
+  },
+  {
+    "name": "remote-tools",
+    "type": "http",
+    "url": "https://example.com/mcp",
+    "headers": []
+  }
+]
+```
+
+Environment/header entries use `{ "name": "...", "value": "..." }` objects.
+Optional server fields are `timeoutMs`, `isolation` (`session` or `workspace`),
+and `protocolVersion` (`legacy`, `auto`, or `2026-07-28`). HTTP/SSE OAuth setup is
+not exposed by this setting. Existing enabled native plugins and CLI MCP
+configuration remain ZCode-managed; Desktop MCP settings are not automatically
+imported. The setting injects servers at both session creation and resume.
 
 ## Permissions and sessions
 

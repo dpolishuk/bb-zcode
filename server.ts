@@ -1,5 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { parseMcpServers } from "./src/settings.js";
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -30,18 +31,53 @@ export default async function plugin(bb: BbPluginApi) {
       description: "Node 24+ executable used for a zcode.cjs bundle.",
       default: "node",
     },
+    memoryEnabled: {
+      type: "boolean",
+      label: "ZCode memory",
+      description:
+        "Allow ZCode to save and recall its native workspace memory in new sessions.",
+      default: false,
+    },
+    nativeSearchEnhancementsEnabled: {
+      type: "boolean",
+      label: "Enhanced native search",
+      description:
+        "Enable ZCode's native find and grep enhancements in new sessions.",
+      default: false,
+    },
+    mcpServers: {
+      type: "string",
+      label: "MCP servers",
+      description:
+        "JSON array of ZCode protocol server definitions. Empty: inherit native CLI configuration.",
+      default: "[]",
+      experimental_schema: z.string().refine((value) => {
+        try {
+          parseMcpServers(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Use a JSON array of ZCode MCP server definitions."),
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   function register(values: {
     executable: string;
     args: string;
     nodeExecutable: string;
+    memoryEnabled: boolean;
+    nativeSearchEnhancementsEnabled: boolean;
+    mcpServers: string;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     const launch = {
       executable: values.executable,
       args,
       nodeExecutable: values.nodeExecutable,
+      memoryEnabled: values.memoryEnabled,
+      nativeSearchEnhancementsEnabled: values.nativeSearchEnhancementsEnabled,
+      mcpServers: values.mcpServers,
     };
     registered?.dispose();
     registered = bb.providers.register({
@@ -73,7 +109,7 @@ export default async function plugin(bb: BbPluginApi) {
         ],
         fork: "none",
         supportsNativeUserQuestion: true,
-        supportsManualCompaction: false,
+        supportsManualCompaction: true,
         supportsThreadArchive: false,
         supportsThreadRename: false,
         supportsServiceTier: false,

@@ -1,9 +1,9 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ZCodeClient, ProtocolError } from "../src/client.js";
 import { resolveLaunch, workspaceRef } from "../src/launch.js";
 import { RUNTIME_PREFERENCES, record } from "../src/protocol.js";
@@ -15,15 +15,31 @@ const root = mkdtempSync(join(tmpdir(), "bb-zcode-live-"));
 const cwd = join(root, "workspace");
 mkdirSync(cwd);
 let modelRequests = 0;
+let imageRequests = 0;
 const receivedEfforts: string[] = [];
 const modelServer = createServer(async (request, response) => {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   // Keep only the selected effort, never model input or credentials.
   const body = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+  const tools = Array.isArray(body.tools) ? body.tools.map(record) : [];
+  const fixtureTool = tools.find((t) =>
+    String(t.name).includes("fixture_echo"),
+  );
+  const lastMessage = JSON.stringify(
+    Array.isArray(body.messages) ? body.messages.at(-1) : {},
+  );
+  const callMcp =
+    !!fixtureTool &&
+    lastMessage.includes("BB_FIXTURE_MCP_TOOL") &&
+    !lastMessage.includes('"tool_result"');
+  if (JSON.stringify(body.messages).includes('"type":"image"')) imageRequests++;
   const effort = record(body.output_config).effort;
   if (typeof effort === "string") receivedEfforts.push(effort);
   modelRequests++;
+  await new Promise((resolve) =>
+    setTimeout(resolve, lastMessage.includes("BB_FIXTURE_DELAY") ? 1500 : 100),
+  );
   response.writeHead(200, { "content-type": "text/event-stream" });
   const event = (type: string, data: unknown) =>
     response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -40,6 +56,32 @@ const modelServer = createServer(async (request, response) => {
       usage: { input_tokens: 10, output_tokens: 0 },
     },
   });
+  if (callMcp) {
+    event("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: "fixture_tool_call",
+        name: fixtureTool!.name,
+        input: {},
+      },
+    });
+    event("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: '{"text":"hello"}' },
+    });
+    event("content_block_stop", { type: "content_block_stop", index: 0 });
+    event("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 7 },
+    });
+    event("message_stop", { type: "message_stop" });
+    response.end();
+    return;
+  }
   event("content_block_start", {
     type: "content_block_start",
     index: 0,
@@ -105,7 +147,7 @@ writeFileSync(
                 contextWindow: 200000,
                 inputFormat: {
                   supportsText: true,
-                  supportsImage: false,
+                  supportsImage: true,
                   supportsVideo: false,
                   supportsAudio: false,
                   supportsPdf: false,
@@ -272,6 +314,21 @@ try {
     permissionEscalation: null,
     model: "bb-smoke/fixture",
     reasoningLevel: "high",
+    providerOptions: {
+      mcpServers: JSON.stringify([
+        {
+          name: "fixture",
+          command: process.execPath,
+          args: [resolve("tests/fixtures/mcp-server.mjs")],
+          env: [
+            {
+              name: "BB_MCP_FIXTURE_LOG",
+              value: join(root, "mcp-methods.jsonl"),
+            },
+          ],
+        },
+      ]),
+    },
   };
   try {
     const catalog = await rpc("model/list", { cwd });
@@ -332,6 +389,113 @@ try {
       throw new Error("Bridge did not forward streamed text.");
     if (receivedEfforts.at(-1) !== "high")
       throw new Error("Selected high effort did not reach the model API.");
+    if (
+      !deltas().some((d) => d.kind === "usage") ||
+      !deltas().some((d) => d.kind === "contextWindow")
+    )
+      throw new Error(
+        "Native token usage or context was not projected into bb.",
+      );
+    const image = join(cwd, "fixture.png"),
+      note = join(cwd, "fixture.txt");
+    writeFileSync(
+      image,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC",
+        "base64",
+      ),
+    );
+    writeFileSync(note, "Synthetic attachment note.");
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghjm",
+      input: [
+        {
+          type: "text",
+          text: "Inspect the attached image and note. Do not call tools.",
+          mentions: [],
+        },
+        { type: "localImage", path: image },
+        { type: "localFile", path: note },
+      ],
+    });
+    // Direct bridge smoke bypasses bb's assembler and its expected-turn check.
+    const queuedTurnId = "assembler-owned-turn";
+    for (const [suffix, prompt] of [
+      ["abcdefghjn", "First queued greeting."],
+      ["abcdefghjp", "Second queued greeting."],
+    ])
+      await rpc("turn/steer", {
+        threadId: "live-smoke",
+        providerThreadId: start.providerThreadId,
+        options,
+        expectedTurnId: queuedTurnId,
+        clientRequestId: `creq_${suffix}`,
+        input: [{ type: "text", text: prompt, mentions: [] }],
+      });
+    await waitFor(
+      () => deltas().filter((d) => d.kind === "turn.boundary").length === 4,
+    );
+    if (
+      deltas()
+        .filter((d) => d.kind === "turn.boundary")
+        .some((d) => d.status !== "completed") ||
+      imageRequests === 0
+    )
+      throw new Error(
+        `Native attachment or queued-follow-up turn failed: ${JSON.stringify({
+          imageRequests,
+          modelRequests,
+          statuses: deltas()
+            .filter((d) => d.kind === "turn.boundary")
+            .map((d) => d.status),
+          diagnostics: deltas()
+            .filter((d) => d.kind === "item.textClose")
+            .map((d) => String(d.text ?? "").slice(0, 500)),
+        })}`,
+      );
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghjq",
+      input: [{ type: "text", text: "/compact", mentions: [] }],
+    });
+    await waitFor(
+      () => deltas().filter((d) => d.kind === "turn.boundary").length === 5,
+    );
+    if (
+      deltas()
+        .filter((d) => d.kind === "turn.boundary")
+        .at(-1)?.status !== "completed"
+    )
+      throw new Error("Native manual compaction did not complete.");
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghjr",
+      input: [
+        {
+          type: "text",
+          text: "BB_FIXTURE_MCP_TOOL Call fixture_echo with text hello.",
+          mentions: [],
+        },
+      ],
+    });
+    await waitFor(
+      () => deltas().filter((d) => d.kind === "turn.boundary").length === 6,
+    );
+    const methods = readFileSync(join(root, "mcp-methods.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => record(JSON.parse(line)));
+    if (!methods.some((m) => m.method === "tools/call"))
+      throw new Error(
+        "The native runtime did not execute the configured MCP tool.",
+      );
     await rpc("thread/stop", {
       threadId: "live-smoke",
       providerThreadId: start.providerThreadId,
@@ -439,12 +603,50 @@ try {
       "--permission-mode",
       "full",
       "--prompt",
-      "Reply with a short greeting. Do not call tools.",
+      "BB_FIXTURE_DELAY Reply with a short greeting. Do not call tools.",
       "--title",
       "ZCode isolated integration smoke",
       "--json",
     );
     const threadId = textForId(thread.id);
+    await cli(
+      "thread",
+      "wait",
+      threadId,
+      "--event",
+      "turn/started",
+      "--timeout",
+      "30s",
+      "--json",
+    );
+    await cli(
+      "thread",
+      "tell",
+      threadId,
+      "Reply to the queued follow-up. Do not call tools.",
+      "--mode",
+      "steer",
+      "--json",
+    );
+    const completedDeadline = Date.now() + 30_000;
+    let completedEvents: Array<Record<string, unknown>> = [];
+    while (Date.now() < completedDeadline) {
+      completedEvents = await cli("thread", "log", threadId, "--all", "--json");
+      if (
+        completedEvents.filter((e) => e.type === "turn/completed").length >= 2
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (completedEvents.filter((e) => e.type === "turn/completed").length !== 2)
+      throw new Error(
+        "Installed bb did not settle both the running turn and its queued follow-up.",
+      );
+    const accepted = completedEvents.filter(
+      (e) => e.type === "turn/input/accepted",
+    );
+    if (accepted.length !== 2)
+      throw new Error("Installed bb did not correlate both accepted inputs.");
     await cli(
       "thread",
       "wait",
@@ -462,6 +664,52 @@ try {
       );
     if (receivedEfforts.at(-1) !== "low")
       throw new Error("bb's selected low effort did not reach the model API.");
+    const beforeInstalledImage = imageRequests;
+    await cli(
+      "thread",
+      "tell",
+      threadId,
+      "Inspect the attached image and note. Do not call tools.",
+      "--mode",
+      "auto",
+      "--image",
+      join(cwd, "fixture.png"),
+      "--file",
+      join(cwd, "fixture.txt"),
+      "--json",
+    );
+    const attachmentDeadline = Date.now() + 30_000;
+    while (Date.now() < attachmentDeadline) {
+      const events: Array<Record<string, unknown>> = await cli(
+        "thread",
+        "log",
+        threadId,
+        "--all",
+        "--json",
+      );
+      if (events.filter((e) => e.type === "turn/completed").length >= 3) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (imageRequests <= beforeInstalledImage)
+      throw new Error(
+        "Installed bb image upload did not reach native model input.",
+      );
+    await cli("thread", "compact", threadId, "--json");
+    await cli(
+      "thread",
+      "wait",
+      threadId,
+      "--status",
+      "idle",
+      "--timeout",
+      "30s",
+      "--json",
+    );
+    const context = await cli("thread", "context", threadId, "--json");
+    if (!JSON.stringify(context).includes("200000"))
+      throw new Error(
+        "Installed bb context meter did not receive the native model window.",
+      );
     bbThreadVerified = true;
   }
   console.log(
@@ -469,6 +717,7 @@ try {
       {
         status: "RUNTIME_VERIFIED",
         checks: [
+          "attachments, queued follow-ups, usage/context, manual compaction and configured MCP tool execution",
           "create",
           "subscribe",
           "setMode",

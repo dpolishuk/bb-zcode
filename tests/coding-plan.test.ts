@@ -32,7 +32,7 @@ function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
       },
     }),
   );
-  const credentials = {
+  const credentials: Record<string, string> = {
     "oauth:active_provider": family,
     [`oauth:${family}:access_token`]: "private-login-canary",
     [`oauth:${family}:user_info`]: JSON.stringify({
@@ -250,6 +250,97 @@ it("refreshes a rejected token only within the same account scope", async () => 
     ),
   );
   expect(record(result.requestAuth).apiKey).toBe("private-project-canary-2");
+});
+
+it.each(["zai", "bigmodel"] as const)(
+  "supplies scoped official MCP identity headers for %s",
+  async (family) => {
+    const f = fixture(family, true);
+    f.credentials.zcodejwttoken = "private-zcode-jwt-canary";
+    f.save();
+    await f.host.initialize(f.client);
+    const response = await f.host.authorizeOfficialMcp(
+      {
+        requestId: "mcp-request",
+        pluginId: "official-plugin",
+        mcpKey: "search",
+        targetOrigin: "https://zcode.z.ai",
+        workspace: {
+          workspaceKey: "bb:/workspace",
+          workspacePath: "/workspace",
+        },
+      },
+      "/workspace",
+    );
+    expect(response).toEqual({
+      ok: true,
+      headers: {
+        Authorization: "Bearer private-zcode-jwt-canary",
+        "X-Bigmodel-Authorization": "Bearer private-login-canary",
+        "Bigmodel-Target-Type": "PERSONAL",
+      },
+    });
+  },
+);
+
+it.each([
+  "https://evil.example",
+  "https://zcode.z.ai.evil.example",
+  "https://user:secret@zcode.z.ai",
+  "http://zcode.z.ai",
+])(
+  "rejects official MCP origin %s before reading identity",
+  async (targetOrigin) => {
+    const f = fixture();
+    await f.host.initialize(f.client);
+    const result = await f.host.authorizeOfficialMcp(
+      {
+        requestId: "r",
+        pluginId: "p",
+        mcpKey: "m",
+        targetOrigin,
+        workspace: {
+          workspaceKey: "bb:/workspace",
+          workspacePath: "/workspace",
+        },
+      },
+      "/workspace",
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: "official_mcp_origin_untrusted",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-");
+  },
+);
+
+it("does not give official MCP credentials to a different workspace or after logout", async () => {
+  const f = fixture();
+  f.credentials.zcodejwttoken = "private-zcode-jwt-canary";
+  f.save();
+  await f.host.initialize(f.client);
+  const request = {
+    requestId: "r",
+    pluginId: "p",
+    mcpKey: "m",
+    targetOrigin: "https://zcode.z.ai",
+    workspace: { workspaceKey: "/other", workspacePath: "/other" },
+  };
+  expect(await f.host.authorizeOfficialMcp(request, "/workspace")).toEqual({
+    ok: false,
+    reason: "official_auth_unavailable",
+  });
+  f.credentials["oauth:zai:access_token"] = "";
+  f.save();
+  const result = await f.host.authorizeOfficialMcp(
+    {
+      ...request,
+      workspace: { workspaceKey: "bb:/workspace", workspacePath: "/workspace" },
+    },
+    "/workspace",
+  );
+  expect(result).toEqual({ ok: false, reason: "official_auth_unavailable" });
+  expect(JSON.stringify(result)).not.toContain("private-");
 });
 
 it.each(["logout", "switch", "close"])(
