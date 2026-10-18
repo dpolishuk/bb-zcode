@@ -35,14 +35,16 @@ your installed ZCode CLI and uses its existing provider configuration.
 
 ## Features
 
-|                        | What you get                                           |
-| ---------------------- | ------------------------------------------------------ |
-| **Live conversations** | Stream text and reasoning directly into bb.            |
-| **Native tools**       | Follow ZCode tool calls and results in the thread.     |
-| **Human decisions**    | Answer approvals and questions through bb.             |
-| **Session continuity** | Stop, release, and resume saved conversations.         |
-| **Model discovery**    | Choose from ZCode's models and reasoning options.      |
-| **Plan mode**          | Ask ZCode to inspect the workspace and prepare a plan. |
+|                        | What you get                                                 |
+| ---------------------- | ------------------------------------------------------------ |
+| **Live conversations** | Stream text and reasoning directly into bb.                  |
+| **Native tools**       | Follow ZCode tool calls and results in the thread.           |
+| **Human decisions**    | Answer approvals and questions through bb.                   |
+| **Session continuity** | Stop, release, and resume saved conversations.               |
+| **Model discovery**    | Choose from ZCode's models and reasoning options.            |
+| **bb extensions**      | Enable bb plugin tools and load bb skill files.              |
+| **Custom agents**      | Configure native subagents and answer their questions in bb. |
+| **Plan mode**          | Ask ZCode to inspect the workspace and prepare a plan.       |
 
 Each thread runs its own supervised ZCode process. The plugin reads ZCode's
 existing sign-in and keeps short-lived Coding Plan credentials in memory;
@@ -145,7 +147,7 @@ overrides, permission modes, and troubleshooting.
 | Platform      | macOS                       |
 | CLI runtime   | Node.js 24 and 26.5.0       |
 
-**80 automated tests** cover the bridge contract, streaming, approvals,
+Automated tests cover the bridge contract, streaming, approvals,
 questions, cancellation, resume, account authentication, and transport failures.
 An end-to-end check also passed through **bb → this plugin → the real ZCode CLI**,
 using a deterministic local model fixture.
@@ -162,8 +164,11 @@ implemented but has not received the same live verification.
 - MCP servers can be configured at session startup. Official MCP authentication
   supports individual Coding Plan on the default ZCode endpoint. Native memory
   and enhanced search are optional settings; see [configuration](docs/configuration.md).
-- Tool activity appears as generic rows. Rich diffs, cost billing, forks,
-  archive/rename mirroring, bb-injected tools, and bb skill roots remain unsupported.
+- The optional bb tool bridge retains plugin presentations and text/image
+  results. bb skill catalogs point to original files; they are not added to ZCode’s native Skill catalog.
+  Custom subagents and nested tool attribution are supported; Bash rows retain output.
+- Rich diffs, cost billing, forks, archive/rename mirroring and full background-task
+  management remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -12,7 +12,7 @@ const options = {
   permissionScope: "full",
   approvalReviewer: null,
   permissionEscalation: null,
-  providerOptions: { executable: process.execPath },
+  providerOptions: { executable: process.execPath, bbToolsEnabled: true },
   model: "test/model",
 };
 const closes: Array<() => Promise<void>> = [];
@@ -20,7 +20,10 @@ afterEach(async () => {
   await Promise.all(closes.splice(0).map((f) => f()));
 });
 
-function harness(earlyStart = true) {
+function harness(
+  earlyStart = true,
+  startupCheck?: (callbacks: ClientCallbacks) => Promise<void>,
+) {
   let callbacks: ClientCallbacks,
     seq = 0,
     turn = 0,
@@ -74,6 +77,7 @@ function harness(earlyStart = true) {
         async request(method, raw) {
           const params = record(raw);
           calls.push({ method, params });
+          if (method === "session/create") await startupCheck?.(callbacks);
           if (
             method === "session/create" ||
             method === "session/resume" ||
@@ -123,7 +127,7 @@ function harness(earlyStart = true) {
     providerThreadId: "native-session",
     options,
   };
-  async function start() {
+  async function start(extra: Record<string, unknown> = {}) {
     expect(
       (
         await rpc("thread/start", {
@@ -131,6 +135,7 @@ function harness(earlyStart = true) {
           cwd,
           options,
           instructionMode: "append",
+          ...extra,
         })
       ).error,
     ).toBeUndefined();
@@ -156,6 +161,7 @@ function harness(earlyStart = true) {
   }
   return {
     rpc,
+    bridge,
     calls,
     messages,
     cwd,
@@ -540,4 +546,376 @@ it("does not replay an accepted turn/start client request", async () => {
   await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
   expect((await h.send("replayed")).error).toBeUndefined();
   expect(h.calls.filter((c) => c.method === "session/send")).toHaveLength(1);
+});
+
+it("configures bb skills and exposes original paths on fresh and resumed execution", async () => {
+  const h = harness();
+  const path = join(h.cwd, "bb-skills");
+  mkdirSync(join(path, "review"), { recursive: true });
+  writeFileSync(
+    join(path, "review", "SKILL.md"),
+    "# Review\nRead references/check.md",
+  );
+  const roots = [
+    {
+      id: "plugin",
+      path,
+      skills: [{ name: "review", description: "Review code" }],
+    },
+  ];
+  const init = await h.rpc("initialize", {
+    protocolVersion: 1,
+    client: { name: "test", version: "1" },
+  });
+  expect(record(record(init.result).capabilities).skills).toEqual({
+    configure: true,
+  });
+  expect((await h.rpc("skills/configure", { roots })).error).toBeUndefined();
+  await h.start();
+  await h.send("hello");
+  expect(
+    h.calls.find((c) => c.method === "session/send")?.params.content,
+  ).toContain(join(path, "review", "SKILL.md"));
+  h.event("turn.completed", { resultType: "success" });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  await h.rpc("thread/stop", {
+    ...h.base,
+    intent: "release",
+    activeTurnId: null,
+  });
+  expect(
+    (
+      await h.rpc("thread/resume", {
+        ...h.base,
+        cwd: h.cwd,
+        instructionMode: "append",
+      })
+    ).error,
+  ).toBeUndefined();
+  await h.send("resumed", "abcdefghjk");
+  expect(
+    h.calls.filter((c) => c.method === "session/send").at(-1)?.params.content,
+  ).toContain(join(path, "review", "SKILL.md"));
+});
+
+it("rejects relative roots and traversal skill names", async () => {
+  const h = harness();
+  for (const root of [
+    { id: "x", path: "relative", skills: [] },
+    { id: "x", path: h.cwd, skills: [{ name: "../escape", description: "x" }] },
+  ])
+    expect(
+      (await h.rpc("skills/configure", { roots: [root] })).error,
+    ).toBeDefined();
+});
+
+const bbTool = {
+  name: "fixture.echo",
+  description: "Echo text from bb",
+  inputSchema: {
+    type: "object",
+    properties: { text: { type: "string" } },
+    required: ["text"],
+  },
+  presentation: {
+    label: { pending: "Echoing", completed: "Echo" },
+    icon: { glyph: "Terminal" },
+  },
+};
+async function injectedEndpoint(h: ReturnType<typeof harness>) {
+  const servers = h.calls.find((c) => c.method === "session/create")?.params
+    .mcpServers as Array<Record<string, unknown>> | undefined;
+  const server = servers?.find((s) => s.name === "bb-bridge");
+  expect(server, "bb tools must reach native startup").toBeDefined();
+  const headers = Object.fromEntries(
+    (server!.headers as Array<{ name: string; value: string }>).map((h) => [
+      h.name,
+      h.value,
+    ]),
+  );
+  return { url: String(server!.url), headers };
+}
+async function mcp(
+  endpoint: { url: string; headers: Record<string, string> },
+  method: string,
+  params: unknown = {},
+) {
+  return fetch(endpoint.url, {
+    method: "POST",
+    headers: { ...endpoint.headers, "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+}
+
+it("forwards injected tool calls to bb and retains text, images and presentation", async () => {
+  const h = harness();
+  await h.start({ dynamicTools: [bbTool] });
+  await h.send("call the tool");
+  const endpoint = await injectedEndpoint(h);
+  const listing = await (await mcp(endpoint, "tools/list")).json();
+  const tool = listing.result.tools[0];
+  expect(tool.inputSchema).toEqual(bbTool.inputSchema);
+  const pending = mcp(endpoint, "tools/call", {
+    name: tool.name,
+    arguments: { text: "hello" },
+  });
+  await h.until(() => h.messages.some((m) => m.method === "item/tool/call"));
+  const request = h.messages.find((m) => m.method === "item/tool/call")!;
+  expect(record(request.params)).toMatchObject({
+    threadId: "thread",
+    providerThreadId: "native-session",
+    tool: "fixture.echo",
+    arguments: { text: "hello" },
+  });
+  h.bridge.handleLine(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        success: true,
+        contentItems: [
+          { type: "inputText", text: "hello" },
+          { type: "inputImage", imageUrl: "data:image/png;base64,aGVsbG8=" },
+        ],
+      },
+    }),
+  );
+  expect((await (await pending).json()).result).toMatchObject({
+    isError: false,
+    content: [
+      { type: "text", text: "hello" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ],
+  });
+  expect(h.deltas().filter((d) => record(d.item).server === "bb")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "item.open",
+        presentation: bbTool.presentation,
+      }),
+      expect.objectContaining({
+        kind: "item.close",
+        status: "completed",
+        presentation: bbTool.presentation,
+      }),
+    ]),
+  );
+});
+
+it("denies unauthenticated MCP access and cancels pending bb calls on stop", async () => {
+  const h = harness();
+  await h.start({ dynamicTools: [bbTool] });
+  await h.send("call tool");
+  const endpoint = await injectedEndpoint(h);
+  expect((await mcp({ ...endpoint, headers: {} }, "tools/list")).status).toBe(
+    401,
+  );
+  const list = await (await mcp(endpoint, "tools/list")).json();
+  const pending = mcp(endpoint, "tools/call", {
+    name: list.result.tools[0].name,
+    arguments: {},
+  });
+  await h.until(() => h.messages.some((m) => m.method === "item/tool/call"));
+  await h.rpc("thread/stop", {
+    ...h.base,
+    intent: "interrupt",
+    activeTurnId: null,
+  });
+  expect((await (await pending).json()).result.isError).toBe(true);
+  await expect(mcp(endpoint, "tools/list")).rejects.toThrow();
+});
+
+it("does not publish denied or duplicate bb tools", async () => {
+  const h = harness();
+  const duplicate = await h.rpc("thread/start", {
+    threadId: "dupe",
+    cwd: h.cwd,
+    options,
+    instructionMode: "append",
+    dynamicTools: [bbTool, bbTool],
+  });
+  expect(duplicate.error).toBeDefined();
+  await h.start({ dynamicTools: [bbTool], disallowedTools: [bbTool.name] });
+  expect(
+    h.calls.filter((c) => c.method === "session/create").at(-1)?.params
+      .mcpServers,
+  ).toBeUndefined();
+});
+
+it("serves validated custom subagent configuration with session scoping", async () => {
+  const h = harness();
+  const subagents = {
+    kind: "ready",
+    profiles: [
+      {
+        name: "reviewer",
+        description: "Review",
+        source: "user",
+        systemPrompt: "Review carefully",
+        tools: ["Read"],
+        maxTurns: 3,
+      },
+    ],
+    builtInModelSelectionOverrides: {},
+    pluginAgentModelSelectionOverrides: {},
+  };
+  await h.start({
+    options: {
+      ...options,
+      providerOptions: {
+        ...options.providerOptions,
+        subagents: JSON.stringify(subagents),
+      },
+    },
+  });
+  expect(
+    await h.reverse("session/requestRuntimePreferences", {
+      sessionId: "native-session",
+      scope: "runtime-materialization",
+    }),
+  ).toMatchObject({ subagentRuntimeConfigEnabled: true });
+  expect(
+    await h.reverse("subagents/readRuntimeConfig", {
+      sessionId: "native-session",
+    }),
+  ).toEqual(subagents);
+  await expect(
+    h.reverse("subagents/readRuntimeConfig", { sessionId: "other-session" }),
+  ).rejects.toThrow("mismatch");
+});
+
+it("rejects invalid custom subagents before launching native sessions", async () => {
+  const h = harness();
+  const reply = await h.rpc("thread/start", {
+    threadId: "invalid",
+    cwd: h.cwd,
+    options: {
+      ...options,
+      providerOptions: {
+        ...options.providerOptions,
+        subagents: '{"kind":"ready","profiles":[{"source":"built-in"}]}',
+      },
+    },
+    instructionMode: "append",
+  });
+  expect(reply.error).toBeDefined();
+  expect(h.calls).toHaveLength(0);
+});
+
+it("refuses unknown tools and calls outside an active turn", async () => {
+  const h = harness();
+  await h.start({ dynamicTools: [bbTool] });
+  const endpoint = await injectedEndpoint(h);
+  const list = await (await mcp(endpoint, "tools/list")).json();
+  expect(
+    (await (await mcp(endpoint, "tools/call", { name: "unknown" })).json())
+      .error.code,
+  ).toBe(-32602);
+  expect(
+    (
+      await (
+        await mcp(endpoint, "tools/call", { name: list.result.tools[0].name })
+      ).json()
+    ).result.isError,
+  ).toBe(true);
+  expect(h.messages.some((m) => m.method === "item/tool/call")).toBe(false);
+});
+
+it("maps bb tool failures and suppresses duplicate native MCP rows", async () => {
+  const h = harness();
+  await h.start({ dynamicTools: [bbTool] });
+  await h.send("call tool");
+  const endpoint = await injectedEndpoint(h);
+  const list = await (await mcp(endpoint, "tools/list")).json();
+  const alias = list.result.tools[0].name;
+  h.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "native-mcp",
+    toolName: `mcp__bb-bridge__${alias}`,
+    input: {},
+  });
+  h.event("tool.updated", { kind: "started", toolCallId: "native-mcp" });
+  const pending = mcp(endpoint, "tools/call", { name: alias, arguments: {} });
+  await h.until(() => h.messages.some((m) => m.method === "item/tool/call"));
+  const request = h.messages.find((m) => m.method === "item/tool/call")!;
+  h.bridge.handleLine(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        success: false,
+        contentItems: [{ type: "inputText", text: "fixture failed" }],
+      },
+    }),
+  );
+  expect((await (await pending).json()).result).toMatchObject({
+    isError: true,
+    content: [{ type: "text", text: "fixture failed" }],
+  });
+  h.event("tool.updated", {
+    kind: "result",
+    toolCallId: "native-mcp",
+    result: { success: true },
+  });
+  expect(h.deltas().filter((d) => d.kind === "item.open")).toHaveLength(1);
+  expect(h.deltas().filter((d) => d.kind === "item.close")).toHaveLength(1);
+  for (const message of h.messages.filter((m) => m.method === "thread/delta"))
+    expect(
+      threadDeltaNotificationParamsSchema.safeParse(message.params).success,
+    ).toBe(true);
+});
+
+it("closes pending bb tool rows before a crashed session boundary", async () => {
+  const h = harness();
+  await h.start({ dynamicTools: [bbTool] });
+  await h.send("call tool");
+  const endpoint = await injectedEndpoint(h);
+  const list = await (await mcp(endpoint, "tools/list")).json();
+  const pending = mcp(endpoint, "tools/call", {
+    name: list.result.tools[0].name,
+    arguments: {},
+  });
+  await h.until(() => h.messages.some((m) => m.method === "item/tool/call"));
+  h.crash();
+  expect((await (await pending).json()).result.isError).toBe(true);
+  const deltas = h.deltas();
+  expect(deltas.findIndex((d) => d.kind === "item.close")).toBeLessThan(
+    deltas.findIndex((d) => d.kind === "turn.boundary"),
+  );
+});
+
+it("binds native subagent startup callbacks before the session snapshot arrives", async () => {
+  const subagents = { kind: "built-in-fallback" };
+  const h = harness(true, async (callbacks) => {
+    expect(
+      await callbacks.request("subagents/readRuntimeConfig", {
+        sessionId: "native-session",
+      }),
+    ).toEqual(subagents);
+    await expect(
+      callbacks.request("subagents/readRuntimeConfig", {
+        sessionId: "foreign-session",
+      }),
+    ).rejects.toThrow("mismatch");
+  });
+  await h.start({
+    options: {
+      ...options,
+      providerOptions: {
+        ...options.providerOptions,
+        subagents: JSON.stringify(subagents),
+      },
+    },
+  });
+});
+
+it("preserves CLI MCP inheritance until the bb tool bridge is enabled", async () => {
+  const h = harness();
+  await h.start({
+    dynamicTools: [bbTool],
+    options: { ...options, providerOptions: { executable: process.execPath } },
+  });
+  expect(
+    h.calls.find((c) => c.method === "session/create")?.params.mcpServers,
+  ).toBeUndefined();
 });

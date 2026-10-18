@@ -22,7 +22,15 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
 - Text and attachment prompts, streaming, generic tool activity, interruption,
   resume, queued follow-ups, token/context reporting and native `/compact` are
   supported. Follow-ups wait for a turn boundary; they do not inject into an
-  active model loop. Forks and injected bb tools/skills remain unsupported.
+  active model loop. Forks remain unsupported.
+- Enable `bbToolsEnabled` for bb-injected tools. It is off by default to preserve
+  CLI MCP inheritance; when enabled, list other custom servers in `mcpServers`.
+  These tools run through a session-scoped local MCP endpoint and bb’s tool
+  dispatcher. bb skills are a file catalog read with native tools, not entries in
+  ZCode’s native Skill registry. Start a new session to refresh the selection.
+- `subagents` accepts a validated native configuration snapshot. Empty inherits
+  native agents; custom child questions/approvals return through the parent bb
+  session. Full background-task management and a subagent tree UI are not implemented.
 - `mcpServers` accepts native stdio/http/sse startup definitions. Native CLI MCP
   configuration is inherited when this list is empty. `memoryEnabled` and
   `nativeSearchEnhancementsEnabled` are optional booleans, off by default.

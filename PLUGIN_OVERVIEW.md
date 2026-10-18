@@ -9,6 +9,8 @@ activity, approval prompts, and saved sessions you can return to later.
 - Plan, stop, release, and resume saved conversations.
 - Queue follow-ups, attach images and files, inspect token/context usage, and
   request native compaction.
+- Enable bb plugin tools and use bb skill files, configure native subagents,
+  and retain nested tool attribution and command output.
 - Configure native MCP servers and enable ZCode memory or enhanced search.
 
 ## Requirements
@@ -26,9 +28,14 @@ tokens stay in memory and raw child-protocol logging is disabled.
 
 ## Current limits
 
-Tool results use generic rows. Follow-ups queue at turn boundaries; in-flight
-guidance is not supported. Forks, bb-injected tools/skills, browser host control,
-interactive plugin UI, and workflow/scheduler services remain unsupported.
+The bb tool bridge is opt-in to preserve native CLI MCP inheritance; configure
+other custom servers in the plugin when enabling it.
+
+Bash commands have command rows; other native tools use generic rows with nested
+attribution. bb skills are exposed through a file catalog, not the native Skill
+registry. Follow-ups queue at turn boundaries. Forks, full background-task
+management, browser host control, interactive plugin UI and workflow/scheduler
+services remain unsupported.
 Official MCP auth supports individual Coding Plan on the default ZCode endpoint;
 its credential flow has fixture coverage. Each session runs a
 local ZCode process with the host account's permissions; approval modes are

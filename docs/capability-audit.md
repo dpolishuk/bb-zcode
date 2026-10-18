@@ -14,6 +14,24 @@ every native tool works against a production model. A coverage percentage would
 be misleading: native CLI behavior, host services, and desktop UI features have
 different integration requirements.
 
+## Implementation update: v0.4.0
+
+The next ecosystem priority adds:
+
+| Audited gap             | v0.4.0 status                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| bb-injected tools       | Opt-in session-scoped authenticated MCP handoff to bb's tool dispatcher; schemas, presentation, text/images, errors, stop/crash cancellation and resume |
+| bb-injected skill roots | Catalog of original SKILL.md paths; native Read loads the files. Not a native Skill-registry injection                                                  |
+| Custom subagents        | Validated native configuration snapshots, built-in/plugin model overrides and startup callback with session identity checks                             |
+| Nested tool activity    | Parent references retained; Bash command rows and bounded output snapshots/final output                                                                 |
+| Child interactions      | Real native custom-agent question round-trip verified against deterministic fixtures; production accounts remain separate                               |
+
+This completes the bounded tools/skills/configuration portion of priority 4.
+Full subagent trees, background-task lifecycle and rich diffs still need work.
+Browser control still needs a browser host provider; forks/rewind require the
+current-protocol adapter described in priority 5. Larger account/desktop host
+features remain separately scoped. See the [validation record](validation.md).
+
 ## Implementation update: v0.3.0
 
 The original matrix below is pinned to v0.2.0. The v0.3.0 update implements the

@@ -16,6 +16,24 @@ const cwd = join(root, "workspace");
 mkdirSync(cwd);
 let modelRequests = 0;
 let imageRequests = 0;
+let bbToolCalls = 0;
+let skillReads = 0;
+let bashResults = 0;
+let childQuestions = 0;
+let customAgentRequests = 0;
+let installedToolResults = 0;
+let installedSkillReads = 0;
+const skillRoot = join(root, "bb-skills");
+const skillPath = join(skillRoot, "fixture-skill", "SKILL.md");
+mkdirSync(join(skillRoot, "fixture-skill", "references"), { recursive: true });
+writeFileSync(
+  skillPath,
+  "# BB_FIXTURE_SKILL_CONTENT\nRead references/check.md\n",
+);
+writeFileSync(
+  join(skillRoot, "fixture-skill", "references", "check.md"),
+  "BB_FIXTURE_SKILL_REFERENCE\n",
+);
 const receivedEfforts: string[] = [];
 const modelServer = createServer(async (request, response) => {
   const chunks: Buffer[] = [];
@@ -29,10 +47,104 @@ const modelServer = createServer(async (request, response) => {
   const lastMessage = JSON.stringify(
     Array.isArray(body.messages) ? body.messages.at(-1) : {},
   );
+  const allModelText = (Array.isArray(body.messages) ? body.messages : [])
+    .flatMap((m) => {
+      const content = record(m).content;
+      return Array.isArray(content)
+        ? content.map((c) => String(record(c).text ?? ""))
+        : [String(content ?? "")];
+    })
+    .join("\n");
+  if (
+    lastMessage.includes('"tool_result"') &&
+    lastMessage.includes("BB_INSTALLED_TOOL_RESULT")
+  )
+    installedToolResults++;
+  if (
+    lastMessage.includes('"tool_result"') &&
+    lastMessage.includes("BB_INSTALLED_SKILL_CONTENT")
+  )
+    installedSkillReads++;
+  if (
+    lastMessage.includes('"tool_result"') &&
+    lastMessage.includes("BB_FIXTURE_BASH_RESULT")
+  )
+    bashResults++;
   const callMcp =
     !!fixtureTool &&
     lastMessage.includes("BB_FIXTURE_MCP_TOOL") &&
     !lastMessage.includes('"tool_result"');
+  if (JSON.stringify(body.system).includes("BB_FIXTURE_CUSTOM_AGENT"))
+    customAgentRequests++;
+  let toolCall: { name: string; input: unknown } | undefined = callMcp
+    ? { name: String(fixtureTool!.name), input: { text: "hello" } }
+    : undefined;
+  if (!lastMessage.includes('"tool_result"')) {
+    if (lastMessage.includes("BB_FIXTURE_BB_TOOL")) {
+      const tool = tools.find((t) =>
+        String(t.description).includes("fixture.echo"),
+      );
+      if (!tool)
+        throw new Error("Injected bb tool missing from model tool catalog.");
+      toolCall = { name: String(tool.name), input: { text: "bb echo" } };
+    } else if (lastMessage.includes("BB_FIXTURE_SKILL_READ")) {
+      if (!lastMessage.includes(skillPath))
+        throw new Error("bb skill catalog did not reach the model.");
+      toolCall = { name: "Read", input: { file_path: skillPath } };
+    } else if (lastMessage.includes("BB_FIXTURE_INSTALLED_SKILL")) {
+      const match = allModelText.match(
+        /"path":"([^"\n]*fixture-installed-skill\/SKILL\.md)"/,
+      );
+      if (!match)
+        throw new Error("Installed bb skill catalog did not reach the model.");
+      toolCall = { name: "Read", input: { file_path: match[1] } };
+    } else if (lastMessage.includes("BB_FIXTURE_BASH")) {
+      toolCall = {
+        name: "Bash",
+        input: { command: "printf BB_FIXTURE_BASH_RESULT" },
+      };
+    } else if (lastMessage.includes("BB_FIXTURE_INSTALLED_AGENT")) {
+      toolCall = {
+        name: "Agent",
+        input: {
+          description: "Installed fixture reviewer",
+          subagent_type: "fixture-reviewer",
+          prompt: "Say a short greeting.",
+        },
+      };
+    } else if (lastMessage.includes("BB_FIXTURE_AGENT")) {
+      toolCall = {
+        name: "Agent",
+        input: {
+          description: "Fixture reviewer",
+          subagent_type: "fixture-reviewer",
+          prompt: "BB_FIXTURE_CHILD Ask the fixture question.",
+        },
+      };
+    } else if (lastMessage.includes("BB_FIXTURE_CHILD")) {
+      toolCall = {
+        name: "AskUserQuestion",
+        input: {
+          questions: [
+            {
+              question: "Fixture choice?",
+              header: "Fixture",
+              options: [
+                { label: "Proceed", description: "Continue fixture" },
+                { label: "Stop", description: "End fixture" },
+              ],
+              multiSelect: false,
+            },
+          ],
+        },
+      };
+    }
+  }
+  if (
+    lastMessage.includes("BB_FIXTURE_SKILL_CONTENT") &&
+    lastMessage.includes('"tool_result"')
+  )
+    skillReads++;
   if (JSON.stringify(body.messages).includes('"type":"image"')) imageRequests++;
   const effort = record(body.output_config).effort;
   if (typeof effort === "string") receivedEfforts.push(effort);
@@ -56,21 +168,24 @@ const modelServer = createServer(async (request, response) => {
       usage: { input_tokens: 10, output_tokens: 0 },
     },
   });
-  if (callMcp) {
+  if (toolCall) {
     event("content_block_start", {
       type: "content_block_start",
       index: 0,
       content_block: {
         type: "tool_use",
-        id: "fixture_tool_call",
-        name: fixtureTool!.name,
+        id: `fixture_tool_call_${modelRequests}`,
+        name: toolCall.name,
         input: {},
       },
     });
     event("content_block_delta", {
       type: "content_block_delta",
       index: 0,
-      delta: { type: "input_json_delta", partial_json: '{"text":"hello"}' },
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify(toolCall.input),
+      },
     });
     event("content_block_stop", { type: "content_block_stop", index: 0 });
     event("message_delta", {
@@ -286,9 +401,64 @@ try {
     throw new Error("Resume changed the session identity.");
   await client.close();
   const messages: Record<string, unknown>[] = [];
+  const dynamicTools = [
+    {
+      name: "fixture.echo",
+      description: "bb fixture echo",
+      inputSchema: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+      },
+      presentation: {
+        label: { pending: "Echoing", completed: "Echo" },
+        icon: { glyph: "Terminal" },
+      },
+    },
+  ];
   const bridge = createBridge({
     env,
-    write: (message) => messages.push(message),
+    write: (message) => {
+      messages.push(message);
+      if (message.method === "item/tool/call") {
+        bbToolCalls++;
+        if (record(message.params).tool !== "fixture.echo")
+          throw new Error("Wrong bb fixture tool.");
+        bridge.handleLine(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              success: true,
+              contentItems: [{ type: "inputText", text: "bb echo" }],
+            },
+          }),
+        );
+      } else if (message.method === "interaction/request") {
+        const payload = record(record(message.params).payload);
+        if (payload.kind === "user_question") {
+          childQuestions++;
+          bridge.handleLine(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                kind: "user_answer",
+                answers: { q0: { selected: ["Proceed"], freeText: null } },
+              },
+            }),
+          );
+        } else if (payload.kind === "approval") {
+          bridge.handleLine(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: { decision: "allow_once" },
+            }),
+          );
+        }
+      }
+    },
   });
   let nextId = 0;
   const waitFor = async (predicate: () => boolean) => {
@@ -315,6 +485,23 @@ try {
     model: "bb-smoke/fixture",
     reasoningLevel: "high",
     providerOptions: {
+      bbToolsEnabled: true,
+      subagents: JSON.stringify({
+        kind: "ready",
+        profiles: [
+          {
+            name: "fixture-reviewer",
+            description: "Fixture reviewer",
+            source: "user",
+            systemPrompt:
+              "BB_FIXTURE_CUSTOM_AGENT. Follow the user's fixture prompt.",
+            tools: ["Read", "AskUserQuestion"],
+            maxTurns: 3,
+          },
+        ],
+        builtInModelSelectionOverrides: {},
+        pluginAgentModelSelectionOverrides: {},
+      }),
       mcpServers: JSON.stringify([
         {
           name: "fixture",
@@ -331,6 +518,15 @@ try {
     },
   };
   try {
+    await rpc("skills/configure", {
+      roots: [
+        {
+          id: "fixture",
+          path: skillRoot,
+          skills: [{ name: "fixture-skill", description: "Fixture skill" }],
+        },
+      ],
+    });
     const catalog = await rpc("model/list", { cwd });
     const discovered = (catalog.models as Array<Record<string, unknown>>).find(
       (entry) => entry.model === "bb-smoke/fixture",
@@ -351,6 +547,7 @@ try {
       cwd,
       options,
       instructionMode: "append",
+      dynamicTools,
     });
     if (start.sessionRestorable !== false)
       throw new Error(
@@ -496,6 +693,48 @@ try {
       throw new Error(
         "The native runtime did not execute the configured MCP tool.",
       );
+    for (const [index, prompt] of [
+      "BB_FIXTURE_BB_TOOL Call the bb tool.",
+      "BB_FIXTURE_AGENT Delegate to fixture-reviewer.",
+      "BB_FIXTURE_BASH Run the deterministic echo command.",
+    ].entries()) {
+      await rpc("turn/start", {
+        threadId: "live-smoke",
+        providerThreadId: start.providerThreadId,
+        options,
+        clientRequestId: `creq_abcdefghk${index + 2}`,
+        input: [{ type: "text", text: prompt, mentions: [] }],
+      });
+      await waitFor(
+        () =>
+          deltas().filter((d) => d.kind === "turn.boundary").length ===
+          7 + index,
+      );
+      if (
+        deltas()
+          .filter((d) => d.kind === "turn.boundary")
+          .at(-1)?.status !== "completed"
+      )
+        throw new Error("Extension fixture turn failed.");
+    }
+    if (
+      !bashResults ||
+      !deltas().some(
+        (d) =>
+          d.kind === "item.close" &&
+          record(d.item).type === "command" &&
+          String(record(d.item).aggregatedOutput).includes(
+            "BB_FIXTURE_BASH_RESULT",
+          ),
+      )
+    )
+      throw new Error(
+        "Native command output was not retained in bb command rows.",
+      );
+    if (bbToolCalls !== 1 || !childQuestions || !customAgentRequests)
+      throw new Error(
+        `Extension fixture incomplete: ${JSON.stringify({ bbToolCalls, childQuestions, customAgentRequests })}`,
+      );
     await rpc("thread/stop", {
       threadId: "live-smoke",
       providerThreadId: start.providerThreadId,
@@ -508,9 +747,30 @@ try {
       cwd,
       options,
       instructionMode: "append",
+      dynamicTools,
     });
     if (resumedBridge.providerThreadId !== start.providerThreadId)
       throw new Error("Bridge resume changed identity.");
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghk9",
+      input: [
+        {
+          type: "text",
+          text: "BB_FIXTURE_SKILL_READ Read the bb fixture skill.",
+          mentions: [],
+        },
+      ],
+    });
+    await waitFor(
+      () => deltas().filter((d) => d.kind === "turn.boundary").length === 10,
+    );
+    if (!skillReads)
+      throw new Error(
+        "Native Read did not return the injected skill contents.",
+      );
   } finally {
     await bridge.close();
   }
@@ -556,6 +816,16 @@ try {
       );
       return JSON.parse(stdout);
     };
+    const plugins = await cli("plugin", "list", "--json");
+    if (Array.isArray(plugins) && plugins.some((p) => p.id === "zcode-fixture"))
+      await cli("plugin", "remove", "zcode-fixture", "--json");
+    await cli(
+      "plugin",
+      "install",
+      resolve("tests/fixtures/bb-extension-plugin"),
+      "--yes",
+      "--json",
+    );
     await cli(
       "plugin",
       "config",
@@ -563,6 +833,24 @@ try {
       "set",
       "executable",
       wrapper,
+      "--json",
+    );
+    await cli(
+      "plugin",
+      "config",
+      "zcode",
+      "set",
+      "subagents",
+      options.providerOptions.subagents,
+      "--json",
+    );
+    await cli(
+      "plugin",
+      "config",
+      "zcode",
+      "set",
+      "bbToolsEnabled",
+      "true",
       "--json",
     );
     const models = await cli("provider", "models", "zcode", "--json");
@@ -710,6 +998,52 @@ try {
       throw new Error(
         "Installed bb context meter did not receive the native model window.",
       );
+    const beforeInstalledAgent = customAgentRequests;
+    for (const prompt of [
+      "BB_FIXTURE_BB_TOOL Call the installed bb tool.",
+      "BB_FIXTURE_INSTALLED_SKILL Read the installed fixture skill.",
+      "BB_FIXTURE_INSTALLED_AGENT Delegate a greeting to fixture-reviewer.",
+    ]) {
+      const beforeEvents: Array<Record<string, unknown>> = await cli(
+        "thread",
+        "log",
+        threadId,
+        "--all",
+        "--json",
+      );
+      const completions = beforeEvents.filter(
+        (e) => e.type === "turn/completed",
+      ).length;
+      await cli("thread", "tell", threadId, prompt, "--mode", "auto", "--json");
+      const end = Date.now() + 30_000;
+      let finished = false;
+      while (Date.now() < end) {
+        const events: Array<Record<string, unknown>> = await cli(
+          "thread",
+          "log",
+          threadId,
+          "--all",
+          "--json",
+        );
+        if (
+          events.filter((e) => e.type === "turn/completed").length > completions
+        ) {
+          finished = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!finished)
+        throw new Error("Installed extension turn did not settle.");
+    }
+    if (
+      !installedToolResults ||
+      !installedSkillReads ||
+      customAgentRequests <= beforeInstalledAgent
+    )
+      throw new Error(
+        `Installed extension results missing: ${JSON.stringify({ installedToolResults, installedSkillReads, customAgentRequests })}`,
+      );
     bbThreadVerified = true;
   }
   console.log(
@@ -744,6 +1078,15 @@ try {
         receivedEfforts,
         codingPlan,
         bbThreadVerified,
+        extensions: {
+          bbToolCalls,
+          skillReads,
+          bashResults,
+          childQuestions,
+          customAgentRequests,
+          installedToolResults,
+          installedSkillReads,
+        },
         modelBackend: "synthetic loopback fixture",
         realProviderAuthenticationTested: false,
         isolatedDataDir: root,

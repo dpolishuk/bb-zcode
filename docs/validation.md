@@ -26,6 +26,40 @@ Reference source snapshots:
 The published SDK and installed applications, rather than an assumed source
 build, were used for the runtime checks.
 
+## v0.4.0: bb extensions and custom subagents
+
+On 2026-10-18, **95 automated tests**, formatting, marketplace consistency,
+TypeScript checking and the plugin build passed. Tests include bb tool
+forwarding, text/image responses, failures, unauthenticated and unknown calls,
+stop/crash settlement order, duplicate/denied tools, default MCP inheritance,
+skill catalog validation/resume, subagent configuration and startup identity,
+nested tool references, streamed input reconstruction and command output.
+
+The expanded real ZCode CLI 0.16.9 fixture exercises the authenticated local
+MCP bridge, a native custom subagent asking a question through bb, native Read
+loading a bb skill after cold resume, and a Bash command whose final output is
+retained in bb's command row. It also repeats the existing attachments,
+follow-up queue, usage/context, compaction, configured stdio MCP, account-auth
+fixtures and cold-resume checks.
+
+A fresh disposable bb 0.46.1 instance installed the v0.4.0 candidate and a
+synthetic companion plugin. Its native dispatcher executed that plugin's tool,
+loaded its selected skill file, and created a configured custom subagent. The
+full run reported `RUNTIME_VERIFIED`, `bbThreadVerified: true`, 30 model
+requests, one installed tool result, one installed skill read and three
+custom-agent model requests (direct and installed checks combined).
+
+The bb tool bridge is opt-in. The default preserves native CLI MCP inheritance;
+when enabled, the host-supplied MCP list replaces that CLI list. Additional
+custom servers must be listed in the plugin's MCP setting. Native plugin MCP
+servers are still composed by ZCode. Skill support is a catalog of original
+files read by native tools, not insertion into ZCode's native Skill registry.
+
+All model and account services in these fixtures are synthetic. Production
+inference, official MCP access, native memory behavior, all subagent profile
+options, full background-task lifecycle, forks/rewind and browser host services
+remain **UNVERIFIED** or unsupported as described in the capability audit.
+
 ## v0.3.0: priority capability expansion
 
 On 2026-10-18, all **80 automated tests**, TypeScript checking, formatting,

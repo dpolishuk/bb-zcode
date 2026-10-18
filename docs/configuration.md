@@ -2,14 +2,16 @@
 
 ## Launch settings
 
-| Setting                           | Default     | Purpose                                                                  |
-| --------------------------------- | ----------- | ------------------------------------------------------------------------ |
-| `executable`                      | Auto-detect | Native executable or `.cjs` / `.mjs` / `.js` CLI path                    |
-| `nodeExecutable`                  | `node`      | Node.js 24+ executable for a JavaScript CLI bundle                       |
-| `args`                            | `[]`        | JSON array of arguments before `app-server`, passed without a shell      |
-| `memoryEnabled`                   | `false`     | Allow native ZCode memory in new sessions                                |
-| `nativeSearchEnhancementsEnabled` | `false`     | Enable native enhanced find/grep in new sessions                         |
-| `mcpServers`                      | `[]`        | JSON array of native MCP server definitions; empty inherits CLI settings |
+| Setting                           | Default     | Purpose                                                                                        |
+| --------------------------------- | ----------- | ---------------------------------------------------------------------------------------------- |
+| `executable`                      | Auto-detect | Native executable or `.cjs` / `.mjs` / `.js` CLI path                                          |
+| `nodeExecutable`                  | `node`      | Node.js 24+ executable for a JavaScript CLI bundle                                             |
+| `args`                            | `[]`        | JSON array of arguments before `app-server`, passed without a shell                            |
+| `memoryEnabled`                   | `false`     | Allow native ZCode memory in new sessions                                                      |
+| `nativeSearchEnhancementsEnabled` | `false`     | Enable native enhanced find/grep in new sessions                                               |
+| `bbToolsEnabled`                  | `false`     | Enable the bb tool bridge; overrides native CLI MCP server list                                |
+| `subagents`                       | Empty       | JSON native subagent snapshot; empty inherits native configuration                             |
+| `mcpServers`                      | `[]`        | JSON array of native MCP server definitions; empty inherits CLI settings when bb tools are off |
 
 Use `node scripts/bb.mjs plugin config zcode set <setting> <value>` from the
 checkout, or `bb plugin config` if the bb CLI is on PATH. Paths must exist on
@@ -126,6 +128,69 @@ and `protocolVersion` (`legacy`, `auto`, or `2026-07-28`). HTTP/SSE OAuth setup 
 not exposed by this setting. Existing enabled native plugins and CLI MCP
 configuration remain ZCode-managed; Desktop MCP settings are not automatically
 imported. The setting injects servers at both session creation and resume.
+
+## bb tools and skills
+
+Enable `bbToolsEnabled` to make tools selected by bb plugins available through
+a private loopback MCP endpoint for each session. It is off by default: ZCode’s
+host-supplied MCP list replaces the native CLI MCP list. When enabled, list any
+additional custom servers in `mcpServers`; native plugin MCP servers still load.
+Names and JSON input schemas come from bb; calls return through bb's tool
+dispatcher, with the original plugin presentation, text/image results and failure
+status. The `bb-bridge` MCP server name is reserved. Tool selection is fixed at session
+creation and rebuilt on cold resume; bb's denied tools are excluded.
+
+The endpoint binds only to 127.0.0.1, requires a random session credential,
+rejects browser-origin requests and bounds request bodies to 1 MiB. Unknown
+tools and calls outside an active turn fail. Stop, crash and turn settlement
+cancel pending bridge waits and settle their rows. Calls time out after ten
+minutes. Cancellation does not undo effects a bb tool has already performed.
+
+bb skills are delivered as a model-visible catalog of names, descriptions and
+absolute SKILL.md paths. ZCode reads applicable files with its native file
+tools; supporting assets stay in the original skill directory. This does not
+register the skills in ZCode's native `Skill` tool catalog. The roots must be
+available on the execution host. The catalog is refreshed at process/session
+construction, including resume. No global ZCode configuration or project files
+are modified to install these skills.
+
+## Custom subagents
+
+The optional `subagents` setting accepts the native resolved snapshot:
+
+```json
+{
+  "kind": "ready",
+  "profiles": [
+    {
+      "name": "reviewer",
+      "description": "Review changes for correctness",
+      "source": "user",
+      "systemPrompt": "Inspect the requested changes and report concrete problems.",
+      "tools": ["Read", "Grep", "Glob"],
+      "maxTurns": 8
+    }
+  ],
+  "builtInModelSelectionOverrides": {},
+  "pluginAgentModelSelectionOverrides": {}
+}
+```
+
+Profiles support the native model selection, tool allow/deny lists, skills,
+MCP server selection, permission mode, memory scope, background preference,
+color and instruction settings. Optional model selections use `providerId`,
+`modelId` and `options.reasoningLevel`; built-in override keys are `Explore`
+and `general-purpose`. Invalid or duplicate profiles are rejected before
+launch. Empty settings preserve native agent loading; an explicit
+`{"kind":"built-in-fallback"}` requests the native built-in fallback.
+
+The native startup callback is scoped to the supervised session and checked
+against the returned session identity. Child questions and approvals use the
+parent bb session. Nested tool events preserve their parent reference; Bash
+commands use bb's command row with bounded output snapshots and final output.
+A full subagent tree, background-task management, rich diffs and checkpoint UI
+remain outside this release. A background preference in a profile does not
+establish complete bb background-task support.
 
 ## Permissions and sessions
 

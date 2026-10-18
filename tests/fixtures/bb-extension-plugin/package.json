@@ -1,0 +1,21 @@
+{
+  "name": "bb-plugin-zcode-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@get-bb/plugin-sdk": "0.6.49"
+  },
+  "bb": {
+    "name": "ZCode smoke fixture",
+    "server": "./server.ts",
+    "skills": [
+      "skills"
+    ],
+    "description": "Deterministic tool and skill for isolated ZCode integration tests.",
+    "branding": {
+      "icon": "Terminal"
+    }
+  },
+  "license": "MIT"
+}

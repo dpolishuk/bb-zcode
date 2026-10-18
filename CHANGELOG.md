@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-10-18
+
+- Add an opt-in bridge for bb plugin tools through a session-scoped authenticated local MCP server,
+  preserving schemas, presentation, text/images and failures. Cancel pending
+  bridge calls on stop/crash and rebuild tool selection on resume.
+- Forward bb skill catalogs with original file paths for native file-tool loading.
+- Add validated native subagent snapshots and model overrides, with scoped startup
+  callbacks and child questions/approvals routed through the parent session.
+- Retain nested tool attribution and render Bash commands with bounded output.
+- Expand native CLI and installed bb extension fixtures; document remaining audit gaps.
+
 ## 0.3.0 — 2026-10-18
 
 - Queue follow-ups in order, cancel pending inputs on stop, and deduplicate

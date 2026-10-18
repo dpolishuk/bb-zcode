@@ -11,6 +11,8 @@ import {
   threadDiscardParamsSchema,
   turnStartParamsSchema,
   turnSteerParamsSchema,
+  skillsConfigureParamsSchema,
+  decodeToolCallResponsePayload,
   PROVIDER_BRIDGE_PROTOCOL_VERSION,
   interactionRequestPayloadSchema,
   approvalInteractionOutcomeSchema,
@@ -41,6 +43,14 @@ import { CodingPlanHost, type AccountHost } from "./coding-plan.js";
 import { nativeInput } from "./input.js";
 import { Usage } from "./usage.js";
 import { runtimeSettings } from "./settings.js";
+import { skillCatalog } from "./skills.js";
+import type { Subagents } from "./subagents.js";
+import {
+  createToolServer,
+  type ToolServer,
+  type BbTool,
+  type ToolResult,
+} from "./tool-server.js";
 
 type Message = Record<string, unknown>;
 type Session = {
@@ -65,6 +75,9 @@ type Session = {
   draining: boolean;
   queue: Array<z.infer<typeof turnSteerParamsSchema>>;
   accepted: Set<string>;
+  toolServer?: ToolServer;
+  skills?: string;
+  injectedNativeCalls: Set<string>;
 };
 type ClientFactory = (
   launch: LaunchSpec,
@@ -82,6 +95,7 @@ const schemas: Record<string, z.ZodType> = {
   "thread/discard": threadDiscardParamsSchema,
   "turn/start": turnStartParamsSchema,
   "turn/steer": turnSteerParamsSchema,
+  "skills/configure": skillsConfigureParamsSchema,
 };
 const modeFor = (options: BridgeExecutionOptions) =>
   options.promptMode === "plan"
@@ -112,6 +126,15 @@ export function createBridge(
   const startingClients = new Map<string, ZCodeConnection>();
   const clients = new Set<ZCodeConnection>();
   const accounts = new Map<ZCodeConnection, AccountHost>();
+  let skills = "";
+  const toolCalls = new Map<
+    string,
+    {
+      session: Session;
+      resolve(value: ToolResult): void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   const interactions = new Map<
     string,
     {
@@ -134,6 +157,98 @@ export function createBridge(
       error: { code, message, ...(data ? { data } : {}) },
     });
 
+  function cancelTools(session: Session) {
+    for (const [id, pending] of toolCalls)
+      if (pending.session === session) {
+        clearTimeout(pending.timer);
+        toolCalls.delete(id);
+        pending.resolve({
+          content: [
+            {
+              type: "text",
+              text: "ZCode session or turn ended before the bb tool returned.",
+            },
+          ],
+          isError: true,
+        });
+      }
+  }
+
+  async function callTool(
+    session: Session | undefined,
+    tool: BbTool,
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    if (!session || session.stopping || !session.timeline)
+      return {
+        content: [
+          { type: "text", text: "No active bb turn for this tool call." },
+        ],
+        isError: true,
+      };
+    const id = `zcode-tool-${randomUUID()}`;
+    const key = { providerItemId: id };
+    const item = { type: "tool" as const, tool: tool.name, server: "bb", args };
+    const presentation = tool.presentation ?? toolPresentation(tool.name);
+    emit(session, [{ kind: "item.open", key, item, presentation }]);
+    const response = await new Promise<ToolResult>((resolve) => {
+      const timer = setTimeout(() => {
+        const pending = toolCalls.get(id);
+        toolCalls.delete(id);
+        pending?.resolve({
+          content: [{ type: "text", text: "bb tool call timed out." }],
+          isError: true,
+        });
+      }, 10 * 60_000);
+      toolCalls.set(id, {
+        session,
+        resolve: (response) => {
+          emit(session, [
+            {
+              kind: "item.close",
+              key,
+              item: {
+                ...item,
+                result: response,
+                ...(response.isError
+                  ? { error: "bb tool reported failure." }
+                  : {}),
+              },
+              status: response.isError ? "failed" : "completed",
+              presentation,
+            },
+          ]);
+          resolve(response);
+        },
+        timer,
+      });
+      try {
+        write({
+          jsonrpc: "2.0",
+          id,
+          method: "item/tool/call",
+          params: {
+            threadId: session.threadId,
+            providerThreadId: session.providerThreadId,
+            turnId: null,
+            callId: id,
+            tool: tool.name,
+            arguments: args,
+          },
+        });
+      } catch {
+        clearTimeout(timer);
+        const pending = toolCalls.get(id);
+        toolCalls.delete(id);
+        pending?.resolve({
+          content: [{ type: "text", text: "Cannot forward the bb tool call." }],
+          isError: true,
+        });
+      }
+    });
+    return response;
+  }
+
   async function prepareAccount(account: AccountHost, client: ZCodeConnection) {
     try {
       await account.initialize(client);
@@ -151,6 +266,8 @@ export function createBridge(
     status: "completed" | "failed" | "interrupted",
     response?: string,
   ) {
+    cancelTools(session);
+    session.injectedNativeCalls.clear();
     const timeline = session.timeline;
     session.timeline = undefined;
     session.activeTurnId = undefined;
@@ -263,7 +380,10 @@ export function createBridge(
       });
     }
     if (event.type === "turn.started" && !session.timeline) {
-      session.timeline = new Timeline((deltas) => emit(session, deltas));
+      session.timeline = new Timeline(
+        (deltas) => emit(session, deltas),
+        session.cwd,
+      );
       emit(session, [
         {
           kind: "turn.open",
@@ -283,7 +403,15 @@ export function createBridge(
       void finishTurn(session, "failed", {
         response: `ZCode: ${text(record(payload.error).message, "Turn failed.")}`,
       });
-    } else session.timeline.event(event.type, event.payload);
+    } else {
+      if (event.type === "tool.updated") {
+        const id = text(payload.toolCallId);
+        if (session.toolServer?.nativeNames.has(text(payload.toolName)))
+          session.injectedNativeCalls.add(id);
+        if (session.injectedNativeCalls.has(id)) return;
+      }
+      session.timeline.event(event.type, event.payload);
+    }
   }
 
   function ask(session: Session, payload: unknown): Promise<unknown> {
@@ -321,10 +449,33 @@ export function createBridge(
       account: AccountHost;
       cwd: string;
       preferences: typeof RUNTIME_PREFERENCES;
+      subagents?: Subagents;
+      nativeSessionId?: string;
     },
   ): Promise<unknown> {
     if (method === "session/requestRuntimePreferences")
       return context?.preferences ?? RUNTIME_PREFERENCES;
+    if (method === "subagents/readRuntimeConfig") {
+      // Native asks during session/create, before its generated identity is
+      // returned. Each supervised child owns exactly one session: bind its
+      // first startup callback, then require the same identity thereafter.
+      if (
+        !session &&
+        context?.subagents &&
+        !context.nativeSessionId &&
+        typeof record(raw).sessionId === "string"
+      )
+        context.nativeSessionId = String(record(raw).sessionId);
+      const expected = session?.providerThreadId ?? context?.nativeSessionId;
+      if (
+        closed ||
+        session?.stopping ||
+        !expected ||
+        record(raw).sessionId !== expected
+      )
+        throw new ProtocolError("ZCode session mismatch.", -32602);
+      return context?.subagents ?? { kind: "built-in-fallback" };
+    }
     if (method === "interaction/requestOfficialMcpAuthHeaders") {
       if (session?.stopping || !context?.account.authorizeOfficialMcp)
         return { ok: false, reason: "official_auth_unavailable" };
@@ -456,6 +607,8 @@ export function createBridge(
   async function release(session: Session, interrupt: boolean) {
     session.stopping = true;
     session.queue = [];
+    cancelTools(session);
+    const closingTools = session.toolServer?.close();
     session.account.close();
     if (interrupt && session.timeline) {
       try {
@@ -470,6 +623,7 @@ export function createBridge(
     }
     settle(session, interrupt ? "interrupted" : "failed");
     await session.client.close();
+    await closingTools;
     clients.delete(session.client);
     accounts.delete(session.client);
     sessions.delete(session.threadId);
@@ -488,6 +642,7 @@ export function createBridge(
     let session: Session | undefined;
     let client: ZCodeConnection | undefined;
     let account: AccountHost | undefined;
+    let toolServer: ToolServer = undefined;
     try {
       const launch = resolveLaunch(params.options.providerOptions, {
         ...(config.env ?? process.env),
@@ -495,10 +650,29 @@ export function createBridge(
       });
       account = config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
       const settings = runtimeSettings(params.options.providerOptions);
+      if (settings.mcpServers.some((s) => s.name === "bb-bridge"))
+        throw new ProtocolError(
+          "MCP server name bb-bridge is reserved for bb tools.",
+          -32602,
+        );
+      toolServer = await createToolServer(
+        settings.bbToolsEnabled ? (params.dynamicTools ?? []) : [],
+        params.disallowedTools ?? [],
+        (tool, args) => callTool(session, tool, args),
+      );
+      const mcpServers = [
+        ...settings.mcpServers,
+        ...(toolServer ? [toolServer.definition] : []),
+      ];
       const context = {
         account,
         cwd: params.cwd,
         preferences: settings.preferences,
+        subagents: settings.subagents,
+        nativeSessionId: resume
+          ? (params as z.infer<typeof threadResumeParamsSchema>)
+              .providerThreadId
+          : (undefined as string | undefined),
       };
       client = factory(
         launch,
@@ -514,6 +688,8 @@ export function createBridge(
             if (session && !session.stopping) {
               session.stopping = true;
               session.queue = [];
+              cancelTools(session);
+              void toolServer?.close();
               settle(session, "failed", failure.message);
               sessions.delete(session.threadId);
               emit(session, [{ kind: "session.ended" }]);
@@ -546,15 +722,19 @@ export function createBridge(
                 titleGenerationEnabled: false,
               }),
           workspace: workspaceRef(params.cwd),
-          ...(settings.mcpServers.length
-            ? { mcpServers: settings.mcpServers }
-            : {}),
+          ...(mcpServers.length ? { mcpServers } : {}),
           ...(params.disallowedTools?.length
             ? { toolDenylist: params.disallowedTools }
             : {}),
         },
       );
       const snapshot = snapshotSchema.parse(response);
+      if (
+        context.nativeSessionId &&
+        context.nativeSessionId !== snapshot.session.sessionId
+      )
+        throw new ProtocolError("ZCode startup session mismatch.", -32602);
+      context.nativeSessionId = snapshot.session.sessionId;
       if (
         accountError &&
         !snapshot.settings.model.available.some(
@@ -599,6 +779,9 @@ export function createBridge(
         accepted: new Set(),
         compacting: false,
         draining: false,
+        toolServer,
+        skills,
+        injectedNativeCalls: new Set(),
         restorable: resume || (snapshot.projection?.turnCount ?? 0) > 0,
         instructions:
           !resume || snapshot.projection?.turnCount === 0
@@ -624,6 +807,7 @@ export function createBridge(
       emit(session, [{ kind: "session.reset" }]);
       return session;
     } catch (failure) {
+      await toolServer?.close();
       account?.close();
       if (client) {
         await client.close();
@@ -684,9 +868,11 @@ export function createBridge(
             inputId: clientRequestId ?? randomUUID(),
             ...(!compact
               ? {
-                  content: session.instructions
-                    ? `<bb_instructions>\n${session.instructions}\n</bb_instructions>\n\n${prompt}`
-                    : prompt,
+                  content:
+                    (session.skills ?? "") +
+                    (session.instructions
+                      ? `<bb_instructions>\n${session.instructions}\n</bb_instructions>\n\n${prompt}`
+                      : prompt),
                   ...(material.attachments
                     ? { attachments: material.attachments }
                     : {}),
@@ -702,6 +888,7 @@ export function createBridge(
           : response.accepted !== true
       )
         throw new Error("ZCode did not accept the prompt.");
+      if (!compact) session.skills = undefined;
       if (session.stopping)
         throw new Error("Session stopped while submitting the prompt.");
       session.instructions = undefined;
@@ -711,7 +898,10 @@ export function createBridge(
           session.accepted.delete(session.accepted.values().next().value!);
       }
       session.compacting = compact;
-      session.timeline = new Timeline((deltas) => emit(session, deltas));
+      session.timeline = new Timeline(
+        (deltas) => emit(session, deltas),
+        session.cwd,
+      );
       const started = session.buffered.find(
         (frame) => record(frame.params).type === "turn.started",
       );
@@ -740,17 +930,20 @@ export function createBridge(
     const account =
       config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
     const settings = runtimeSettings(raw.providerOptions);
+    const context = {
+      account,
+      cwd,
+      preferences: settings.preferences,
+      subagents: settings.subagents,
+      nativeSessionId: undefined as string | undefined,
+    };
     const client = factory(
       launch,
       cwd,
       {
         notification() {},
         request: (method, params) =>
-          reverseRequest(undefined, method, params, {
-            account,
-            cwd,
-            preferences: settings.preferences,
-          }),
+          reverseRequest(undefined, method, params, context),
         exit() {
           account.close();
         },
@@ -772,6 +965,11 @@ export function createBridge(
             : {}),
         }),
       );
+      if (
+        context.nativeSessionId &&
+        context.nativeSessionId !== snapshot.session.sessionId
+      )
+        throw new ProtocolError("ZCode startup session mismatch.", -32602);
       if (
         accountError &&
         !snapshot.settings.model.available.some(
@@ -812,9 +1010,14 @@ export function createBridge(
           fork: "none",
           approvalEnforcedBy: "runtime",
           steerMode: "queue",
-          skills: { configure: false },
+          skills: { configure: true },
         },
       });
+      return;
+    }
+    if (method === "skills/configure") {
+      skills = skillCatalog(parsed.data);
+      result(id, {});
       return;
     }
     if (method === "model/list" || method === "provider/health") {
@@ -994,6 +1197,24 @@ export function createBridge(
     }
     if (frame.method === undefined) {
       const id = String(frame.id);
+      const toolCall = toolCalls.get(id);
+      if (toolCall) {
+        clearTimeout(toolCall.timer);
+        toolCalls.delete(id);
+        const decoded = frame.error
+          ? {
+              contentBlocks: [
+                { type: "text" as const, text: "bb tool call failed." },
+              ],
+              isError: true,
+            }
+          : decodeToolCallResponsePayload(frame.result);
+        toolCall.resolve({
+          content: decoded.contentBlocks,
+          isError: decoded.isError,
+        });
+        return;
+      }
       const pending = interactions.get(id);
       if (pending) {
         clearTimeout(pending.timer);

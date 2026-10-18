@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ProtocolError } from "./client.js";
 import { record, RUNTIME_PREFERENCES } from "./protocol.js";
+import { parseSubagents } from "./subagents.js";
 
 const entry = z.object({ name: z.string().min(1), value: z.string() });
 const common = {
@@ -47,9 +48,12 @@ export function parseMcpServers(value: unknown) {
 
 export function runtimeSettings(raw: unknown) {
   const p = record(raw);
+  const subagents = parseSubagents(p.subagents);
   return {
+    bbToolsEnabled: p.bbToolsEnabled === true,
     preferences: {
       ...RUNTIME_PREFERENCES,
+      subagentRuntimeConfigEnabled: subagents !== undefined,
       memoryEnabled:
         typeof p.memoryEnabled === "boolean"
           ? p.memoryEnabled
@@ -60,5 +64,6 @@ export function runtimeSettings(raw: unknown) {
           : RUNTIME_PREFERENCES.nativeSearchEnhancementsEnabled,
     },
     mcpServers: parseMcpServers(p.mcpServers),
+    subagents,
   };
 }

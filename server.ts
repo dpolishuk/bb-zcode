@@ -1,6 +1,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { parseMcpServers } from "./src/settings.js";
+import { parseSubagents } from "./src/subagents.js";
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -60,6 +61,28 @@ export default async function plugin(bb: BbPluginApi) {
         }
       }, "Use a JSON array of ZCode MCP server definitions."),
     },
+    subagents: {
+      type: "string",
+      label: "Custom subagents",
+      description:
+        "Native subagent configuration as JSON. Empty: inherit ZCode's native agent configuration. Applies to new sessions and resume.",
+      default: "",
+      experimental_schema: z.string().refine((value) => {
+        try {
+          parseSubagents(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Use a native subagent configuration snapshot."),
+    },
+    bbToolsEnabled: {
+      type: "boolean",
+      label: "bb plugin tools",
+      description:
+        "Expose bb tools to ZCode. Overrides the CLI MCP server list; list other custom servers in MCP servers above. Applies to new sessions.",
+      default: false,
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   function register(values: {
@@ -69,6 +92,8 @@ export default async function plugin(bb: BbPluginApi) {
     memoryEnabled: boolean;
     nativeSearchEnhancementsEnabled: boolean;
     mcpServers: string;
+    subagents: string;
+    bbToolsEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     const launch = {
@@ -78,6 +103,8 @@ export default async function plugin(bb: BbPluginApi) {
       memoryEnabled: values.memoryEnabled,
       nativeSearchEnhancementsEnabled: values.nativeSearchEnhancementsEnabled,
       mcpServers: values.mcpServers,
+      subagents: values.subagents,
+      bbToolsEnabled: values.bbToolsEnabled,
     };
     registered?.dispose();
     registered = bb.providers.register({
