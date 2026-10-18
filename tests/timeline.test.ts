@@ -106,3 +106,24 @@ it("joins native streamed tool input to scheduled events that omit arguments", (
     item: { type: "command", aggregatedOutput: "hello" },
   });
 });
+
+it("keeps native command errors visible in a failed command row", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/workspace");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "bash",
+    toolName: "Bash",
+    input: { command: "echo hello" },
+  });
+  timeline.event("tool.updated", {
+    kind: "error",
+    toolCallId: "bash",
+    error: { message: "Permission denied by fixture" },
+  });
+  expect(deltas.at(-1)).toMatchObject({
+    kind: "item.close",
+    status: "failed",
+    item: { type: "command", aggregatedOutput: "Permission denied by fixture" },
+  });
+});

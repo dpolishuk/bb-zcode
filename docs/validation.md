@@ -28,7 +28,7 @@ build, were used for the runtime checks.
 
 ## v0.4.0: bb extensions and custom subagents
 
-On 2026-10-18, **95 automated tests**, formatting, marketplace consistency,
+On 2026-10-18, **96 automated tests**, formatting, marketplace consistency,
 TypeScript checking and the plugin build passed. Tests include bb tool
 forwarding, text/image responses, failures, unauthenticated and unknown calls,
 stop/crash settlement order, duplicate/denied tools, default MCP inheritance,

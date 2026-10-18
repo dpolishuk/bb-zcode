@@ -117,6 +117,7 @@ export class Timeline {
             : result.isError === true || result.success === false
               ? "Tool reported failure"
               : undefined;
+        const commandOutput = [finalOutput, error].filter(Boolean).join("\n");
         this.emit([
           {
             kind: "item.close",
@@ -132,8 +133,8 @@ export class Timeline {
                     ...(typeof result.exitCode === "number"
                       ? { exitCode: result.exitCode }
                       : {}),
-                    ...(finalOutput
-                      ? { aggregatedOutput: finalOutput.slice(-64 * 1024) }
+                    ...(commandOutput
+                      ? { aggregatedOutput: commandOutput.slice(-64 * 1024) }
                       : {}),
                     ...(typeof p.duration === "number"
                       ? { durationMs: p.duration }
