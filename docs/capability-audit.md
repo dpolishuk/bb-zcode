@@ -14,6 +14,26 @@ every native tool works against a production model. A coverage percentage would
 be misleading: native CLI behavior, host services, and desktop UI features have
 different integration requirements.
 
+## Implementation update: v0.5.0
+
+The background-task and history priorities now have a bounded implementation:
+
+| Audited gap                | v0.5.0 status                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Background work            | Thread-scoped Bash task cards and agent delegations survive foreground settlement; native polling/events update terminal states |
+| Task management            | Native task list, bounded Bash output and scoped per-task cancellation; idle release guard and interrupt/crash settlement       |
+| Native bb forks and rewind | Completed-turn checkpoints, exact historical/tip fork and cold native resume in an independent child session                    |
+| Persistent targets         | Native message identity and content hash verified after restart; current revision/epoch CAS; no later-checkpoint fallback       |
+| Workspace file rewind      | Separate native preview/apply commands; expiring single-use preview, Full Access gate, native conflict checks                   |
+| Protocol migration         | Read-only v4 history negotiation and bounded control commands alongside the existing legacy prompt/event lane                   |
+
+This is a control adapter, not a complete v4 subscription/fragment transport
+migration. Full child-session trees, rich file/plan views, browser host services,
+workflows/scheduling and remaining account plans still need work. Native
+background notifications can independently trigger model turns. Real-CLI
+verification uses deterministic loopback inference and temporary files; paid
+production inference remains unverified. See the [validation record](validation.md).
+
 ## Implementation update: v0.4.0
 
 The next ecosystem priority adds:

@@ -23,6 +23,9 @@ let childQuestions = 0;
 let customAgentRequests = 0;
 let installedToolResults = 0;
 let installedSkillReads = 0;
+let automaticBackgroundModelRequests = 0;
+let installedForkContextVerified = false;
+let installedRewindContextVerified = false;
 const skillRoot = join(root, "bb-skills");
 const skillPath = join(skillRoot, "fixture-skill", "SKILL.md");
 mkdirSync(join(skillRoot, "fixture-skill", "references"), { recursive: true });
@@ -55,6 +58,26 @@ const modelServer = createServer(async (request, response) => {
         : [String(content ?? "")];
     })
     .join("\n");
+  if (
+    lastMessage.includes("Continue this checkpoint fork with a short greeting.")
+  ) {
+    if (
+      !allModelText.includes("BB_FIXTURE_DELAY") ||
+      allModelText.includes("BB_FIXTURE_INSTALLED_SKILL")
+    )
+      throw new Error(
+        "Installed fork inference retained the wrong history window.",
+      );
+    installedForkContextVerified = true;
+  }
+  if (lastMessage.includes("Replacement greeting after native bb rewind.")) {
+    if (
+      !allModelText.includes("BB_FIXTURE_INSTALLED_SKILL") ||
+      allModelText.includes("BB_FIXTURE_INSTALLED_AGENT")
+    )
+      throw new Error("Installed rewind inference retained the replaced turn.");
+    installedRewindContextVerified = true;
+  }
   if (
     lastMessage.includes('"tool_result"') &&
     lastMessage.includes("BB_INSTALLED_TOOL_RESULT")
@@ -98,6 +121,28 @@ const modelServer = createServer(async (request, response) => {
       if (!match)
         throw new Error("Installed bb skill catalog did not reach the model.");
       toolCall = { name: "Read", input: { file_path: match[1] } };
+    } else if (
+      lastMessage.includes("BB_FIXTURE_WRITE_ONE") ||
+      lastMessage.includes("BB_FIXTURE_WRITE_TWO")
+    ) {
+      toolCall = {
+        name: "Write",
+        input: {
+          file_path: join(cwd, "rewind-fixture.txt"),
+          content: lastMessage.includes("BB_FIXTURE_WRITE_ONE")
+            ? "before rewind\n"
+            : "after rewind\n",
+        },
+      };
+    } else if (lastMessage.includes("BB_FIXTURE_BACKGROUND")) {
+      toolCall = {
+        name: "Bash",
+        input: {
+          command:
+            "printf BB_BACKGROUND_READY; sleep 15; printf BB_BACKGROUND_DONE",
+          run_in_background: true,
+        },
+      };
     } else if (lastMessage.includes("BB_FIXTURE_BASH")) {
       toolCall = {
         name: "Bash",
@@ -645,6 +690,7 @@ try {
         `Native attachment or queued-follow-up turn failed: ${JSON.stringify({
           imageRequests,
           modelRequests,
+          automaticBackgroundModelRequests,
           statuses: deltas()
             .filter((d) => d.kind === "turn.boundary")
             .map((d) => d.status),
@@ -771,6 +817,232 @@ try {
       throw new Error(
         "Native Read did not return the injected skill contents.",
       );
+    const parentOnly = () =>
+      messages
+        .filter(
+          (m) =>
+            m.method === "thread/delta" &&
+            record(m.params).threadId === "live-smoke",
+        )
+        .flatMap((m) => record(m.params).deltas as Record<string, unknown>[]);
+    for (const [i, marker] of [
+      "BB_FIXTURE_WRITE_ONE",
+      "BB_FIXTURE_WRITE_TWO",
+    ].entries()) {
+      const before = parentOnly().filter(
+        (d) => d.kind === "turn.boundary",
+      ).length;
+      await rpc("turn/start", {
+        threadId: "live-smoke",
+        providerThreadId: start.providerThreadId,
+        options,
+        clientRequestId: `creq_abcdefghp${i + 2}`,
+        input: [{ type: "text", text: marker, mentions: [] }],
+      });
+      await waitFor(
+        () =>
+          parentOnly().filter((d) => d.kind === "turn.boundary").length >
+          before,
+      );
+    }
+    if (
+      readFileSync(join(cwd, "rewind-fixture.txt"), "utf8") !== "after rewind\n"
+    )
+      throw new Error("Native file fixture was not written.");
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghp4",
+      input: [{ type: "text", text: "/zcode-file-preview", mentions: [] }],
+    });
+    const previewText = parentOnly()
+      .filter((d) => d.kind === "item.textClose")
+      .map((d) => String(d.text))
+      .join("\n");
+    const previewToken = previewText.match(
+      /\/zcode-file-rewind (preview-[a-f0-9-]+)/,
+    )?.[1];
+    if (!previewToken)
+      throw new Error(
+        "Native file preview did not authorize rollback: " +
+          previewText.slice(-3000),
+      );
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghp5",
+      input: [
+        {
+          type: "text",
+          text: `/zcode-file-rewind ${previewToken}`,
+          mentions: [],
+        },
+      ],
+    });
+    if (
+      readFileSync(join(cwd, "rewind-fixture.txt"), "utf8") !==
+      "before rewind\n"
+    )
+      throw new Error("Native file rewind did not restore the prior fixture.");
+    // History controls operate against the actual native persisted transcript.
+    const checkpoint = deltas()
+      .filter((d) => d.kind === "turn.boundary" && d.providerCheckpointId)
+      .at(-1)?.providerCheckpointId;
+    if (!checkpoint)
+      throw new Error("Native completion did not expose a stable checkpoint.");
+    const fork = await rpc("thread/fork", {
+      threadId: "history-child",
+      sourceProviderThreadId: start.providerThreadId,
+      sourceProviderCheckpointId: checkpoint,
+      cwd,
+      options,
+      instructionMode: "append",
+      dynamicTools,
+    });
+    if (fork.providerThreadId === start.providerThreadId)
+      throw new Error("Native fork reused its parent.");
+    await rpc("turn/start", {
+      threadId: "history-child",
+      providerThreadId: fork.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghm2",
+      input: [
+        {
+          type: "text",
+          text: "Continue the fork with a greeting.",
+          mentions: [],
+        },
+      ],
+    });
+    await waitFor(() =>
+      messages
+        .filter(
+          (m) =>
+            m.method === "thread/delta" &&
+            record(m.params).threadId === "history-child",
+        )
+        .flatMap((m) => record(m.params).deltas as Record<string, unknown>[])
+        .some((d) => d.kind === "turn.boundary" && d.status === "completed"),
+    );
+    await rpc("thread/stop", {
+      threadId: "history-child",
+      providerThreadId: fork.providerThreadId,
+      intent: "release",
+      activeTurnId: null,
+    });
+    const parentDeltas = () =>
+      messages
+        .filter(
+          (m) =>
+            m.method === "thread/delta" &&
+            record(m.params).threadId === "live-smoke",
+        )
+        .flatMap((m) => record(m.params).deltas as Record<string, unknown>[]);
+    let boundaries = parentDeltas().filter(
+      (d) => d.kind === "turn.boundary",
+    ).length;
+    await rpc("turn/start", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      options,
+      clientRequestId: "creq_abcdefghm3",
+      input: [
+        {
+          type: "text",
+          text: "BB_FIXTURE_BACKGROUND Start a background Bash fixture.",
+          mentions: [],
+        },
+      ],
+    });
+    await waitFor(
+      () =>
+        parentDeltas().filter((d) => d.kind === "turn.boundary").length >
+        boundaries,
+    );
+    await waitFor(() =>
+      parentDeltas().some(
+        (d) =>
+          d.kind === "item.open" && record(d.item).type === "backgroundTask",
+      ),
+    );
+    const task = parentDeltas().find(
+      (d) => d.kind === "item.open" && record(d.item).type === "backgroundTask",
+    )!;
+    const workId = String(record(task.key).providerItemId).slice(
+      "zcode-work-".length,
+    );
+    const beforeControls = modelRequests;
+    for (const [index, prompt] of [
+      `/zcode-tasks`,
+      `/zcode-task-output ${workId}`,
+      `/zcode-task-stop ${workId}`,
+    ].entries()) {
+      boundaries = parentDeltas().filter(
+        (d) => d.kind === "turn.boundary",
+      ).length;
+      await rpc("turn/start", {
+        threadId: "live-smoke",
+        providerThreadId: start.providerThreadId,
+        options,
+        clientRequestId: `creq_abcdefghn${index + 2}`,
+        input: [{ type: "text", text: prompt, mentions: [] }],
+      });
+      await waitFor(
+        () =>
+          parentDeltas().filter((d) => d.kind === "turn.boundary").length >
+          boundaries,
+      );
+    }
+    await waitFor(() =>
+      parentDeltas().some(
+        (d) =>
+          d.kind === "item.close" &&
+          record(d.key).providerItemId === `zcode-work-${workId}` &&
+          d.status === "interrupted",
+      ),
+    );
+    automaticBackgroundModelRequests = modelRequests - beforeControls;
+    // ZCode may automatically notify the model when background work settles.
+    await waitFor(
+      () =>
+        !parentDeltas().some(
+          (d, i, all) =>
+            d.kind === "turn.open" &&
+            !all.slice(i + 1).some((next) => next.kind === "turn.boundary"),
+        ),
+    );
+    if (
+      !parentDeltas().some(
+        (d) =>
+          d.kind === "item.textClose" &&
+          String(d.text).includes("BB_BACKGROUND_READY"),
+      )
+    )
+      throw new Error("Native background output was not returned.");
+    // A cold parent can fork the earlier checkpoint independently of later work.
+    await rpc("thread/stop", {
+      threadId: "live-smoke",
+      providerThreadId: start.providerThreadId,
+      intent: "release",
+      activeTurnId: null,
+    });
+    const coldFork = await rpc("thread/fork", {
+      threadId: "cold-fork",
+      sourceProviderThreadId: start.providerThreadId,
+      sourceProviderCheckpointId: checkpoint,
+      cwd,
+      options,
+      instructionMode: "append",
+      dynamicTools,
+    });
+    await rpc("thread/stop", {
+      threadId: "cold-fork",
+      providerThreadId: coldFork.providerThreadId,
+      intent: "release",
+      activeTurnId: null,
+    });
   } finally {
     await bridge.close();
   }
@@ -817,6 +1089,20 @@ try {
       return JSON.parse(stdout);
     };
     const plugins = await cli("plugin", "list", "--json");
+    // Path installs also execute immutable built artifacts. Reinstall explicitly
+    // so a build in the development checkout cannot masquerade as installed proof.
+    if (process.env.BB_SMOKE_PLUGIN_SOURCE) {
+      if (Array.isArray(plugins) && plugins.some((p) => p.id === "zcode"))
+        await cli("plugin", "remove", "zcode", "--json");
+      await cli(
+        "plugin",
+        "install",
+        process.env.BB_SMOKE_PLUGIN_SOURCE,
+        "--yes",
+        "--json",
+      );
+    }
+
     if (Array.isArray(plugins) && plugins.some((p) => p.id === "zcode-fixture"))
       await cli("plugin", "remove", "zcode-fixture", "--json");
     await cli(
@@ -1044,6 +1330,159 @@ try {
       throw new Error(
         `Installed extension results missing: ${JSON.stringify({ installedToolResults, installedSkillReads, customAgentRequests })}`,
       );
+    const installedWait = async (id: string, previous: number) => {
+      const end = Date.now() + 30_000;
+      while (Date.now() < end) {
+        const log: Array<Record<string, unknown>> = await cli(
+          "thread",
+          "log",
+          id,
+          "--all",
+          "--json",
+        );
+        if (log.filter((e) => e.type === "turn/completed").length > previous)
+          return log;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("Installed history/background operation did not settle.");
+    };
+    const commands = await cli("thread", "commands", threadId, "--json");
+    if (!JSON.stringify(commands).includes("zcode-task-stop"))
+      throw new Error("Installed provider commands are missing.");
+    const sourceLog: Array<Record<string, unknown>> = await cli(
+      "thread",
+      "log",
+      threadId,
+      "--all",
+      "--json",
+    );
+    const checkpointEvent = sourceLog.find((e) => e.type === "turn/completed");
+    if (!checkpointEvent || typeof checkpointEvent.seq !== "number")
+      throw new Error("Missing installed checkpoint event sequence.");
+    const fork = await cli(
+      "thread",
+      "fork",
+      threadId,
+      "--source-seq-end",
+      String(checkpointEvent.seq),
+      "--prompt",
+      "Continue this checkpoint fork with a short greeting.",
+      "--json",
+    );
+    await installedWait(
+      textForId(fork.id),
+      sourceLog.filter(
+        (e) =>
+          e.type === "turn/completed" &&
+          Number(e.seq) <= Number(checkpointEvent.seq),
+      ).length,
+    );
+    const beforeEdit = sourceLog.filter(
+      (e) => e.type === "turn/completed",
+    ).length;
+    await cli(
+      "thread",
+      "edit-message",
+      threadId,
+      "--message",
+      "Replacement greeting after native bb rewind.",
+      "--json",
+    );
+    // Rewind prunes the edited turn, then appends its replacement.
+    const editEnd = Date.now() + 30_000;
+    let edited = false;
+    while (Date.now() < editEnd) {
+      const log: Array<Record<string, unknown>> = await cli(
+        "thread",
+        "log",
+        threadId,
+        "--all",
+        "--json",
+      );
+      if (
+        log.some((e) =>
+          JSON.stringify(e).includes(
+            "Replacement greeting after native bb rewind.",
+          ),
+        ) &&
+        log.filter((e) => e.type === "turn/completed").length >= beforeEdit
+      ) {
+        edited = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!edited) throw new Error("Installed bb edit/rewind did not complete.");
+    let completed = (
+      (await cli("thread", "log", threadId, "--all", "--json")) as Array<
+        Record<string, unknown>
+      >
+    ).filter((e) => e.type === "turn/completed").length;
+    await cli(
+      "thread",
+      "tell",
+      threadId,
+      "BB_FIXTURE_BACKGROUND Start native background Bash.",
+      "--json",
+    );
+    let backgroundLog = await installedWait(threadId, completed);
+    const taskEvent = backgroundLog.find(
+      (e) =>
+        e.type === "item/backgroundTask/progress" ||
+        (e.type === "item/started" &&
+          record(record(e.data).item).type === "backgroundTask"),
+    );
+    if (!taskEvent)
+      throw new Error("Installed background card was not persisted.");
+    completed = backgroundLog.filter((e) => e.type === "turn/completed").length;
+    await cli("thread", "tell", threadId, "/zcode-tasks", "--json");
+    backgroundLog = await installedWait(threadId, completed);
+    const listing = await cli("thread", "output", threadId, "--json");
+    const workId = String(listing.output).match(
+      /^([^:\s]+): (?:running|pending)/m,
+    )?.[1];
+    if (!workId)
+      throw new Error("Installed task list did not return its native task ID.");
+    for (const command of [
+      `/zcode-task-output ${workId}`,
+      `/zcode-task-stop ${workId}`,
+    ]) {
+      completed = backgroundLog.filter(
+        (e) => e.type === "turn/completed",
+      ).length;
+      await cli("thread", "tell", threadId, command, "--json");
+      backgroundLog = await installedWait(threadId, completed);
+    }
+    const terminalEnd = Date.now() + 30_000;
+    let closedTask = false;
+    while (Date.now() < terminalEnd) {
+      const log: Array<Record<string, unknown>> = await cli(
+        "thread",
+        "log",
+        threadId,
+        "--all",
+        "--json",
+      );
+      const state = await cli("thread", "show", threadId, "--json");
+      if (
+        log.some(
+          (e) =>
+            e.type === "item/backgroundTask/completed" &&
+            record(record(e.data).item).taskStatus === "killed",
+        ) &&
+        record(state.thread).status === "idle"
+      ) {
+        closedTask = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!closedTask)
+      throw new Error(
+        "Installed cancelled task did not close or native follow-up did not settle.",
+      );
+    if (!installedForkContextVerified || !installedRewindContextVerified)
+      throw new Error("Installed history inference checks were not exercised.");
     bbThreadVerified = true;
   }
   console.log(
@@ -1067,6 +1506,9 @@ try {
           "selected high effort reaches model API",
           "bb streamed deltas",
           "empty-session durability",
+          "stable checkpoints, native fork continuation and cold checkpoint fork",
+          "native background Bash list/output/cancel and automatic native follow-up",
+          "native file preview and temporary-fixture rollback",
           "release",
           "cold resume",
         ],
@@ -1075,9 +1517,12 @@ try {
           (record(record(created.settings).model).available as unknown[])
             ?.length ?? 0,
         modelRequests,
+        automaticBackgroundModelRequests,
         receivedEfforts,
         codingPlan,
         bbThreadVerified,
+        installedForkContextVerified,
+        installedRewindContextVerified,
         extensions: {
           bbToolCalls,
           skillReads,

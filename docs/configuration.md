@@ -239,3 +239,51 @@ Upstream contracts:
 [provider API](https://github.com/get-bb/bb/blob/main/docs/provider-plugin-api.md),
 [bridge protocol](https://github.com/get-bb/bb/blob/main/docs/provider-bridge-protocol.md),
 [ZCode protocol](https://github.com/zai-org/ZCode/blob/main/packages/shared/src/zcode-protocol/index.ts).
+
+## Background work, forks and rewind
+
+Use bb's normal **Fork** and edit-message/rewind actions. Each completed native
+assistant turn exposes a checkpoint. A fork copies conversation history up to
+that checkpoint into a separate native session, then resumes it with the new
+thread's tools and settings. Forking into another bb environment is supported.
+The source conversation and workspace files are preserved. A tip fork requires
+an idle conversation with a stable assistant reply; empty/unfinished tips fail.
+
+Checkpoint tokens bind a native session, persisted message identity and content
+hash. On native restart the bridge resolves the same entity in the new history
+epoch, then uses its current row ID and revision. Missing/changed targets and
+native stale/rejected command acknowledgements fail explicitly; no later turn
+is silently substituted. Lookup is bounded to 10,000 history rows. Prompts still
+work on older CLIs, but management/fork commands require compatible v4 queries.
+CLI 0.16.9 on macOS is the tested baseline.
+
+Background Bash tasks appear as task cards; background agents appear as
+background delegations. They remain open after the spawning foreground turn
+ends, refresh while running, and close when native state reports completion,
+failure or cancellation. Native child failure closes pending cards as failed.
+An idle release checks native work before detaching; use Stop to interrupt the
+session and cancel its owned tasks. This does not add durable scheduling or a
+complete child-session tree.
+
+Provider commands appear in bb's command menu and `bb thread commands`:
+
+| Command                              | Behavior                                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------- |
+| `/zcode-tasks`                       | List task IDs and native statuses for this session                           |
+| `/zcode-task-output <id>`            | Read up to 8 KiB of authorized native Bash output                            |
+| `/zcode-task-stop <id>`              | Request cancellation of one active, cancellable task                         |
+| `/zcode-file-preview [checkpoint]`   | Preview native file rollback for a turn; defaults to the latest stable reply |
+| `/zcode-file-rewind <preview-token>` | Apply the previewed file-only rollback in Full Access mode                   |
+
+Management commands run when the foreground is idle and do not submit a model
+prompt. ZCode can independently notify its model when background work completes
+or is cancelled, which can produce an additional native turn and usage.
+Agent output is available as task summaries; Bash output retrieval is scoped
+by native session/work IDs, and never reads a caller-supplied filesystem path.
+
+File rollback is separate from conversation rewind. Inspect the native preview
+before applying it outside plan mode. Its session-specific token expires after
+five minutes and can only be used once. History changes invalidate it, background work must
+be stopped, and native file safety checks reject external modifications or
+missing checkpoints. Native Bash edits are reported as ignored rather than
+claimed as restorable. The bridge does not implement arbitrary filesystem undo.

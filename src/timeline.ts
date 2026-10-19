@@ -158,7 +158,11 @@ export class Timeline {
     }
   }
 
-  finish(status: "completed" | "failed" | "interrupted", response?: string) {
+  finish(
+    status: "completed" | "failed" | "interrupted",
+    response?: string,
+    providerCheckpointId?: string,
+  ) {
     const deltas: ThreadDelta[] = [];
     for (const [id, channel] of this.streams)
       deltas.push({
@@ -200,7 +204,11 @@ export class Timeline {
         channel: "agentMessage",
         text: response,
       });
-    deltas.push({ kind: "turn.boundary", status });
+    deltas.push({
+      kind: "turn.boundary",
+      status,
+      ...(providerCheckpointId ? { providerCheckpointId } : {}),
+    });
     this.emit(deltas);
   }
 }

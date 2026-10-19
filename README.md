@@ -35,16 +35,18 @@ your installed ZCode CLI and uses its existing provider configuration.
 
 ## Features
 
-|                        | What you get                                                 |
-| ---------------------- | ------------------------------------------------------------ |
-| **Live conversations** | Stream text and reasoning directly into bb.                  |
-| **Native tools**       | Follow ZCode tool calls and results in the thread.           |
-| **Human decisions**    | Answer approvals and questions through bb.                   |
-| **Session continuity** | Stop, release, and resume saved conversations.               |
-| **Model discovery**    | Choose from ZCode's models and reasoning options.            |
-| **bb extensions**      | Enable bb plugin tools and load bb skill files.              |
-| **Custom agents**      | Configure native subagents and answer their questions in bb. |
-| **Plan mode**          | Ask ZCode to inspect the workspace and prepare a plan.       |
+|                        | What you get                                                    |
+| ---------------------- | --------------------------------------------------------------- |
+| **Live conversations** | Stream text and reasoning directly into bb.                     |
+| **Native tools**       | Follow ZCode tool calls and results in the thread.              |
+| **Human decisions**    | Answer approvals and questions through bb.                      |
+| **Session continuity** | Stop, release, resume, fork and rewind conversations.           |
+| **Background work**    | Track native Bash/agent tasks; list, inspect output and cancel. |
+| **File rollback**      | Preview and explicitly apply native file checkpoints.           |
+| **Model discovery**    | Choose from ZCode's models and reasoning options.               |
+| **bb extensions**      | Enable bb plugin tools and load bb skill files.                 |
+| **Custom agents**      | Configure native subagents and answer their questions in bb.    |
+| **Plan mode**          | Ask ZCode to inspect the workspace and prepare a plan.          |
 
 Each thread runs its own supervised ZCode process. The plugin reads ZCode's
 existing sign-in and keeps short-lived Coding Plan credentials in memory;
@@ -167,8 +169,11 @@ implemented but has not received the same live verification.
 - The optional bb tool bridge retains plugin presentations and text/image
   results. bb skill catalogs point to original files; they are not added to ZCode’s native Skill catalog.
   Custom subagents and nested tool attribution are supported; Bash rows retain output.
-- Rich diffs, cost billing, forks, archive/rename mirroring and full background-task
-  management remain unsupported.
+- Native forks and conversation rewind use stable checkpoints. Background Bash/agent
+  cards and task commands survive foreground settlement. File rollback has separate
+  preview/apply commands; see [configuration](docs/configuration.md).
+- Rich diffs, cost billing, archive/rename mirroring and a full subagent tree
+  remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

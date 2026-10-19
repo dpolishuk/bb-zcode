@@ -7,6 +7,7 @@ import {
   providerMaintenanceParamsSchema,
   threadStartParamsSchema,
   threadResumeParamsSchema,
+  threadForkParamsSchema,
   threadStopParamsSchema,
   threadDiscardParamsSchema,
   turnStartParamsSchema,
@@ -52,6 +53,8 @@ import {
   type ToolResult,
 } from "./tool-server.js";
 
+import { History, BackgroundWork, managementCommands } from "./lifecycle.js";
+
 type Message = Record<string, unknown>;
 type Session = {
   threadId: string;
@@ -71,6 +74,9 @@ type Session = {
   snapshot: Snapshot;
   usage: Usage;
   activeTurnId?: string;
+  history: History;
+  background: BackgroundWork;
+  beforeRowId: number;
   compacting: boolean;
   draining: boolean;
   queue: Array<z.infer<typeof turnSteerParamsSchema>>;
@@ -91,6 +97,7 @@ const schemas: Record<string, z.ZodType> = {
   "provider/health": providerMaintenanceParamsSchema,
   "thread/start": threadStartParamsSchema,
   "thread/resume": threadResumeParamsSchema,
+  "thread/fork": threadForkParamsSchema,
   "thread/stop": threadStopParamsSchema,
   "thread/discard": threadDiscardParamsSchema,
   "turn/start": turnStartParamsSchema,
@@ -265,6 +272,7 @@ export function createBridge(
     session: Session,
     status: "completed" | "failed" | "interrupted",
     response?: string,
+    checkpoint?: string,
   ) {
     cancelTools(session);
     session.injectedNativeCalls.clear();
@@ -272,7 +280,7 @@ export function createBridge(
     session.timeline = undefined;
     session.activeTurnId = undefined;
     session.compacting = false;
-    timeline?.finish(status, response);
+    timeline?.finish(status, response, checkpoint);
     for (const [id, pending] of interactions)
       if (pending.session === session) {
         clearTimeout(pending.timer);
@@ -307,12 +315,22 @@ export function createBridge(
         );
         if (!session.stopping) {
           session.snapshot = snapshot;
+          session.background.update(snapshot.projection);
           emit(session, session.usage.context(snapshot.projection));
         }
       } catch {
         /* Usage queries must never prevent a turn from settling. */
       }
-      if (!session.stopping) settle(session, status, text(payload.response));
+      let checkpoint: string | undefined;
+      if (status === "completed" && !session.compacting) {
+        try {
+          checkpoint = await session.history.checkpoint(session.beforeRowId);
+        } catch {
+          /* Older CLIs remain usable for prompts without history controls. */
+        }
+      }
+      if (!session.stopping)
+        settle(session, status, text(payload.response), checkpoint);
     } finally {
       session.draining = false;
     }
@@ -341,6 +359,8 @@ export function createBridge(
     }
     if (frame.method === "state.updated") {
       const p = record(frame.params);
+      if (p.sessionId === session.providerThreadId)
+        void session.background.refresh().catch(() => {});
       if (
         p.sessionId === session.providerThreadId &&
         session.compacting &&
@@ -390,6 +410,8 @@ export function createBridge(
         },
       ]);
     }
+    if (["session.updated", "tool.updated"].includes(event.type))
+      void session.background.refresh().catch(() => {});
     if (!session.timeline) return;
     if (event.type === "turn.completed") {
       const status =
@@ -604,12 +626,20 @@ export function createBridge(
     );
   }
 
-  async function release(session: Session, interrupt: boolean) {
+  async function release(session: Session, interrupt: boolean, ended = true) {
     session.stopping = true;
     session.queue = [];
     cancelTools(session);
     const closingTools = session.toolServer?.close();
     session.account.close();
+    if (interrupt) {
+      try {
+        await session.background.cancelAll();
+      } catch {
+        /* Child shutdown also tears down owned native work. */
+      }
+    }
+    session.background.close(interrupt ? "interrupted" : "failed");
     if (interrupt && session.timeline) {
       try {
         await session.client.request(
@@ -627,7 +657,7 @@ export function createBridge(
     clients.delete(session.client);
     accounts.delete(session.client);
     sessions.delete(session.threadId);
-    emit(session, [{ kind: "session.ended" }]);
+    if (ended) emit(session, [{ kind: "session.ended" }]);
   }
 
   async function construct(
@@ -690,6 +720,7 @@ export function createBridge(
               session.queue = [];
               cancelTools(session);
               void toolServer?.close();
+              session.background.close("failed");
               settle(session, "failed", failure.message);
               sessions.delete(session.threadId);
               emit(session, [{ kind: "session.ended" }]);
@@ -782,6 +813,15 @@ export function createBridge(
         toolServer,
         skills,
         injectedNativeCalls: new Set(),
+        history: new History(client, snapshot.session.sessionId),
+        background: new BackgroundWork(
+          client,
+          snapshot.session.sessionId,
+          (deltas) => {
+            if (session) emit(session, deltas);
+          },
+        ),
+        beforeRowId: -1,
         restorable: resume || (snapshot.projection?.turnCount ?? 0) > 0,
         instructions:
           !resume || snapshot.projection?.turnCount === 0
@@ -804,7 +844,15 @@ export function createBridge(
         providerThreadId: session.providerThreadId,
         sessionRestorable: session.restorable,
       });
-      emit(session, [{ kind: "session.reset" }]);
+      emit(session, [
+        { kind: "session.reset" },
+        {
+          kind: "extension.state",
+          extensionKind: "bb/provider-commands",
+          payload: { commands: managementCommands },
+        },
+      ]);
+      session.background.update(snapshot.projection);
       return session;
     } catch (failure) {
       await toolServer?.close();
@@ -841,7 +889,62 @@ export function createBridge(
     try {
       const material = await nativeInput(input, session.cwd);
       const prompt = material.content;
+      const command =
+        !material.attachments &&
+        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind)(?:\s+(.*))?$/.exec(
+          prompt.trim(),
+        );
+      if (command) {
+        const argument = (command[2] ?? "").trim();
+        if (
+          command[1] === "zcode-file-rewind" &&
+          (options.permissionMode !== "full" || options.promptMode === "plan")
+        )
+          throw new ProtocolError(
+            "File rewind requires bb Full Access outside plan mode.",
+            -32000,
+          );
+        if (command[1] === "zcode-file-rewind")
+          await session.background.refresh();
+        if (command[1] === "zcode-file-rewind" && session.background.active)
+          throw new ProtocolError(
+            "Stop background tasks before rewinding workspace files.",
+            -32000,
+          );
+        const response =
+          command[1] === "zcode-file-preview"
+            ? await session.history.previewFiles(argument || undefined)
+            : command[1] === "zcode-file-rewind"
+              ? await session.history.rewindFiles(argument)
+              : await session.background.manage(command[1]!, argument);
+        if (session.stopping)
+          throw new Error("Session stopped while managing tasks.");
+        if (clientRequestId) session.accepted.add(clientRequestId);
+        emit(session, [
+          ...(clientRequestId
+            ? [{ kind: "input.accepted" as const, clientRequestId }]
+            : []),
+          { kind: "turn.open" },
+        ]);
+        new Timeline((deltas) => emit(session, deltas), session.cwd).finish(
+          "completed",
+          response,
+        );
+        session.starting = false;
+        for (const frame of session.buffered.splice(0))
+          notification(session, frame);
+        return;
+      }
       const compact = !material.attachments && prompt.trim() === "/compact";
+      session.beforeRowId = Number.MAX_SAFE_INTEGER;
+      if (!compact) {
+        try {
+          const range = await session.history.rows();
+          session.beforeRowId = range.rows.at(-1)?.rowId ?? -1;
+        } catch {
+          /* Optional controls are negotiated independently of prompting. */
+        }
+      }
       const mode = modeFor(options);
       if (mode !== session.mode) {
         await session.client.request("session/setMode", {
@@ -919,6 +1022,79 @@ export function createBridge(
       session.starting = false;
       session.buffered = [];
       throw failure;
+    }
+  }
+
+  async function forkNative(params: z.infer<typeof threadForkParamsSchema>) {
+    const live = [...sessions.values()].find(
+      (s) => s.providerThreadId === params.sourceProviderThreadId,
+    );
+    if (live) {
+      if (live.stopping)
+        throw new ProtocolError("Fork source is stopping.", -32602);
+      if (
+        !params.sourceProviderCheckpointId &&
+        (live.timeline || live.starting || live.draining)
+      )
+        throw new ProtocolError(
+          "Wait for the active ZCode turn before forking its tip.",
+          -32000,
+        );
+      return live.history.fork(params.sourceProviderCheckpointId);
+    }
+    // Cold sources need a temporary supervised process; the child is resumed
+    // separately with its own bb tools, credentials broker and native stream.
+    const launch = resolveLaunch(params.options.providerOptions, {
+      ...(config.env ?? process.env),
+      ...params.options.envVars,
+    });
+    const account =
+      config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
+    const settings = runtimeSettings(params.options.providerOptions);
+    const context = {
+      account,
+      cwd: params.cwd,
+      preferences: settings.preferences,
+      subagents: settings.subagents,
+      nativeSessionId: params.sourceProviderThreadId,
+    };
+    const client = factory(
+      launch,
+      params.cwd,
+      {
+        notification() {},
+        request: (method, raw) =>
+          reverseRequest(undefined, method, raw, context),
+        exit() {
+          account.close();
+        },
+      },
+      null,
+    );
+    clients.add(client);
+    accounts.set(client, account);
+    startingClients.set(params.threadId, client);
+    try {
+      await prepareAccount(account, client);
+      const snapshot = snapshotSchema.parse(
+        await client.request("session/resume", {
+          sessionId: params.sourceProviderThreadId,
+        }),
+      );
+      if (
+        snapshot.session.sessionId !== params.sourceProviderThreadId ||
+        closed
+      )
+        throw new Error("ZCode fork source is unavailable.");
+      return await new History(client, params.sourceProviderThreadId).fork(
+        params.sourceProviderCheckpointId,
+      );
+    } finally {
+      account.close();
+      await client.close();
+      clients.delete(client);
+      accounts.delete(client);
+      startingClients.delete(params.threadId);
     }
   }
 
@@ -1007,7 +1183,7 @@ export function createBridge(
           threadArchive: false,
           threadRename: false,
           threadGoalClear: false,
-          fork: "none",
+          fork: "checkpoint",
           approvalEnforcedBy: "runtime",
           steerMode: "queue",
           skills: { configure: true },
@@ -1103,8 +1279,79 @@ export function createBridge(
       }
       return;
     }
+    if (method === "thread/fork") {
+      const params = parsed.data as z.infer<typeof threadForkParamsSchema>;
+      if (constructing.has(params.threadId))
+        throw new ProtocolError(
+          "Thread is already constructing a ZCode session.",
+          -32602,
+        );
+      const previous = sessions.get(params.threadId);
+      if (previous) {
+        await previous.background.refresh();
+        if (
+          previous.timeline ||
+          previous.starting ||
+          previous.stopping ||
+          previous.draining ||
+          previous.background.active
+        )
+          throw new ProtocolError(
+            "Cannot replace an active ZCode session; stop it first.",
+            -32000,
+          );
+        previous.starting = true;
+      }
+      constructing.add(params.threadId);
+      let nativeId: string;
+      try {
+        nativeId = await forkNative(params);
+        // bb's edit-message commit forks the prepared native tip into the
+        // original bb thread. Replace only its idle runtime; keep old history.
+        if (previous) await release(previous, false, false);
+      } catch (failure) {
+        if (previous && !previous.stopping) {
+          previous.starting = false;
+          for (const frame of previous.buffered.splice(0))
+            notification(previous, frame);
+        }
+        throw failure;
+      } finally {
+        constructing.delete(params.threadId);
+      }
+      const session = await construct(
+        { ...params, providerThreadId: nativeId },
+        true,
+      );
+      result(id, {
+        providerThreadId: session.providerThreadId,
+        sessionRestorable: true,
+      });
+      return;
+    }
     if (method === "thread/start" || method === "thread/resume") {
       const params = parsed.data as z.infer<typeof threadStartParamsSchema>;
+      if (method === "thread/resume") {
+        const previous = sessions.get(params.threadId);
+        if (previous) {
+          await previous.background.refresh();
+          if (
+            previous.timeline ||
+            previous.starting ||
+            previous.stopping ||
+            previous.draining ||
+            previous.background.active
+          )
+            throw new ProtocolError(
+              "Cannot replace an active ZCode session; stop it first.",
+              -32000,
+            );
+          // bb commits a prepared rewind by rebinding the original bb thread
+          // to the fork ID. Rebuild its process/tool endpoint without ending
+          // that bb session or mutating the original persisted conversation.
+          await release(previous, false, false);
+        }
+      }
       const session = await construct(params, method === "thread/resume");
       result(id, {
         providerThreadId: session.providerThreadId,
@@ -1157,7 +1404,11 @@ export function createBridge(
       const interrupt =
         method === "thread/discard" ||
         record(parsed.data).intent === "interrupt";
-      if (!interrupt && (session.timeline || session.starting))
+      if (!interrupt) await session.background.refresh();
+      if (
+        !interrupt &&
+        (session.timeline || session.starting || session.background.active)
+      )
         throw new ProtocolError(
           "Cannot release an active session; interrupt it first.",
           -32602,

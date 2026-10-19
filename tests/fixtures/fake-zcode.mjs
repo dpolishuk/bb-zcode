@@ -1,7 +1,7 @@
 // Synthetic protocol peer, not evidence of a real model run.
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const send = (frame) => process.stdout.write(JSON.stringify(frame) + "\n");
 const pending = new Map();
@@ -20,10 +20,25 @@ const snapshot = (id) => ({
       ],
     },
   },
-  projection: { turnCount: 0 },
+  projection: { turnCount: sessions.get(id)?.turn ?? 0, backgroundJobs: [] },
 });
 function event(sessionId, type, payload) {
   const session = sessions.get(sessionId);
+  if (type === "turn.completed") {
+    session.rows.push({
+      kind: "assistantText",
+      rowId: session.turn * 4,
+      entityId: `message-${session.turn}`,
+      turnId: `native-turn-${session.turn}`,
+      state: "complete",
+      actions: { canFork: true },
+      text: payload.response,
+    });
+    writeFileSync(
+      join(process.cwd(), sessionId + ".json"),
+      JSON.stringify(session),
+    );
+  }
   send({
     method: "session/event",
     params: {
@@ -166,9 +181,41 @@ input.on("line", async (line) => {
       send({ id: m.id, error: { code: -32004, message: "Missing session" } });
       return;
     }
-    writeFileSync(file, "{}");
-    sessions.set(id, { seq: 0, turn: 0 });
+    const stored = existsSync(file)
+      ? JSON.parse(readFileSync(file, "utf8"))
+      : {};
+    sessions.set(id, { seq: 0, turn: 0, rows: [], ...stored });
+    writeFileSync(file, JSON.stringify(sessions.get(id)));
     send({ id: m.id, result: snapshot(id) });
+  } else if (m.method === "session/read")
+    send({ id: m.id, result: snapshot(p.sessionId) });
+  else if (m.method === "v4/conversation/rowsRange")
+    send({
+      id: m.id,
+      result: {
+        rows: sessions.get(p.sessionId).rows,
+        atSeq: 1,
+        atRevision: 1,
+        atLogEpoch: "fixture",
+        hasMore: false,
+      },
+    });
+  else if (m.method === "v4/command" && p.type === "forkAssistant") {
+    const source = sessions.get(p.sessionId),
+      child = `sess_${randomUUID()}`;
+    const rows = source.rows.filter((r) => r.rowId <= p.payload.target.rowId);
+    const state = { seq: 0, turn: rows.length, rows };
+    sessions.set(child, state);
+    writeFileSync(join(process.cwd(), child + ".json"), JSON.stringify(state));
+    send({
+      id: m.id,
+      result: {
+        commandId: p.commandId,
+        status: "accepted",
+        revisionAtDecision: 1,
+        result: { type: "forkAssistant", sessionId: child },
+      },
+    });
   } else if (m.method === "session/subscribe")
     send({
       id: m.id,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-10-19
+
+- Track background Bash tasks and agent delegations across foreground turns;
+  list tasks, read bounded Bash output and cancel specific native work.
+- Prevent idle release while native work remains; cancel on interrupt and
+  settle pending task cards on native child failure.
+- Enable bb forks and edit-message/rewind through exact native checkpoints,
+  including continued and cold forks with isolated child tools and settings.
+- Preserve checkpoint identity across native restarts; validate content and
+  current revision/epoch, and reject missing/stale/rejected targets explicitly.
+- Add native file-rewind preview and explicit apply with a short-lived,
+  single-use token, Full Access gate and native file-conflict checks.
+- Extend automated, real-CLI and installed bb checks; document that native
+  background completion/cancellation can independently trigger model turns.
+
 ## 0.4.0 — 2026-10-18
 
 - Add an opt-in bridge for bb plugin tools through a session-scoped authenticated local MCP server,

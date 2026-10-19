@@ -6,7 +6,9 @@ activity, approval prompts, and saved sessions you can return to later.
 - Stream text and reasoning into a bb thread.
 - Follow ZCode tool calls and results, and answer approvals and questions.
 - Choose models and reasoning options from your ZCode configuration.
-- Plan, stop, release, and resume saved conversations.
+- Plan, stop, release, resume, fork and rewind saved conversations.
+- Track background Bash/agent work; list tasks, inspect output and cancel them.
+- Preview native file checkpoints and explicitly apply a file-only rollback.
 - Queue follow-ups, attach images and files, inspect token/context usage, and
   request native compaction.
 - Enable bb plugin tools and use bb skill files, configure native subagents,
@@ -33,9 +35,11 @@ other custom servers in the plugin when enabling it.
 
 Bash commands have command rows; other native tools use generic rows with nested
 attribution. bb skills are exposed through a file catalog, not the native Skill
-registry. Follow-ups queue at turn boundaries. Forks, full background-task
-management, browser host control, interactive plugin UI and workflow/scheduler
-services remain unsupported.
+registry. Follow-ups queue at turn boundaries. Full subagent trees, browser host
+control, interactive plugin UI and workflow/scheduler services remain unsupported.
+History controls require compatible native v4 queries. Conversation rewind
+preserves files; file rollback uses separate preview/apply commands. ZCode may
+automatically notify its model when background work completes or is cancelled.
 Official MCP auth supports individual Coding Plan on the default ZCode endpoint;
 its credential flow has fixture coverage. Each session runs a
 local ZCode process with the host account's permissions; approval modes are

@@ -1,6 +1,6 @@
 # Validation record
 
-Verified locally on 2026-10-17 and 2026-10-18, macOS. The checks below cover the source
+Verified locally on 2026-10-17 through 2026-10-19, macOS. The checks below cover the source
 checkout, an isolated real-CLI smoke, and installation from the published
 marketplace. Model connectivity remains a separate verification boundary.
 
@@ -25,6 +25,50 @@ Reference source snapshots:
 
 The published SDK and installed applications, rather than an assumed source
 build, were used for the runtime checks.
+
+## v0.5.0: background management and history controls
+
+The candidate passed **138 automated tests across 11 files**, including bb's
+canonical bridge conformance, plus formatting, marketplace consistency,
+TypeScript checking and the plugin build. A disposable bb 0.46.1 server/daemon
+explicitly reinstalled the candidate's immutable build before executing native
+checkpoint forks, edit-message/rewind and background list/output/cancel commands.
+The full fixture reported `RUNTIME_VERIFIED`, `bbThreadVerified: true`, 43
+synthetic model requests and one native background notification follow-up.
+Existing tool/skill/custom-agent, attachment, queue, context and compaction
+checks also passed. These installed candidate checks are distinct from a
+published Git-cache installation; release notes record published-source proof.
+
+On 2026-10-19, the real ZCode CLI 0.16.9 fixture verified completed-turn
+checkpoints, conversation-only forks with a continued child model turn, and a
+cold fork from an earlier checkpoint after later parent work. Native background
+Bash runs survive the foreground turn, expose bounded output, accept scoped
+cancellation, and settle their task cards. ZCode independently generated a
+model follow-up after background settlement; management commands themselves do
+not call `session/send`.
+
+The native file fixture uses Write on a temporary file twice, inspects the
+native file-rewind preview, applies its explicit token, then verifies that the
+file contains its previous contents. Automated cases cover external-modification
+previews, single-use/session-bound tokens, revision drift, missing/foreign/changed
+checkpoints, paginated target lookup, stale/rejected/invalid acknowledgements,
+restart epoch rebinding, active-tip rejection, different target workspaces,
+release-before-notification and interrupt/crash settlement. Background agent
+delegation mapping has synthetic projection coverage; the real background-work
+fixture uses Bash. Native bb rewind is tested as a staged checkpoint fork
+followed by a tip fork into the original idle bb thread.
+
+The v0.5.0 adapter uses read-only v4 row queries and compare-and-swap commands;
+it keeps legacy session streaming for model turns. Checkpoint persistence is
+based on canonical native entity identity and content hash, with fresh row IDs
+and watermarks after native restart. No full v4 fragmented subscription decoder
+or physical replay transport is claimed.
+
+Source contracts were refreshed against [ZCode 0a1fc56](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411)
+and [bb 9937c46](https://github.com/get-bb/bb/tree/9937c46f5c7e369de3563eb864c8cbc4c3b9c231).
+The runtime checks use the installed versions listed above, deterministic
+loopback model/account services and isolated temporary workspaces. Paid
+production inference and other operating systems remain **UNVERIFIED**.
 
 ## v0.4.0: bb extensions and custom subagents
 

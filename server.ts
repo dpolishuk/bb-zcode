@@ -134,7 +134,7 @@ export default async function plugin(bb: BbPluginApi) {
           "max",
           "ultra",
         ],
-        fork: "none",
+        fork: "checkpoint",
         supportsNativeUserQuestion: true,
         supportsManualCompaction: true,
         supportsThreadArchive: false,
