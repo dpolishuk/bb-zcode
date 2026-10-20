@@ -17,3 +17,7 @@
   version 1; upstream `main` still keeps the legacy session API. Updated
   [protocol contracts](contracts/protocol-contracts.md) and
   [change verification](runbooks/change-verification.md).
+- **Updated** Recorded the upstream no-drift re-check (110 methods unchanged
+  versus 0a1fc56) and the confirmed remaining feature gaps in
+  docs/capability-audit.md; noted surface stability in
+  [protocol contracts](contracts/protocol-contracts.md).

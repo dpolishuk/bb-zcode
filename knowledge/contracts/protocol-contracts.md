@@ -81,7 +81,10 @@ snapshots.
   bb-tool/skill/subagent paths passing. Upstream `main` still declares
   `ZCODE_PROTOCOL_VERSION = 1` with the legacy session methods present under
   deletion-boundary comments and v4 wire version 3 coexisting - the legacy
-  API has not been removed yet, but the documented migration risk stands.
+  API has not been removed yet, but the documented migration risk stands. The
+  protocol method and v4 command surfaces are unchanged versus the 0a1fc56
+  pin (110 methods, none added or removed), so the
+  [capability audit](../../docs/capability-audit.md) inventory is current.
 
 ## Translation rules
 

@@ -14,6 +14,28 @@ every native tool works against a production model. A coverage percentage would
 be misleading: native CLI behavior, host services, and desktop UI features have
 different integration requirements.
 
+## Re-verification: unchanged upstream surface and remaining gaps (2026-10-20)
+
+The upstream protocol surface was re-diffed against the v0.5.0 refresh pin
+[ZCode 0a1fc56][zcode-tree] as of 2026-10-20 ([main @ 3c5b227][zcode-main]):
+the 110 protocol methods and the v4 command set are unchanged (nothing added
+or removed), so the baseline matrix below is still current and there are no
+unaudited native features. The adapter itself uses roughly twenty of those
+methods; the missing groups below were re-confirmed in the v0.5.0 source at
+commit `5dbed52`.
+
+| Gap group                   | Detail                                                                                                                                                                                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host reverse-RPC services   | `interaction/browserList` / `interaction/browserExecute`, `automation/*` (5 methods), `offPeak/*` (2), `bot/channel/reply` - rejected                                                                                                                                      |
+| MCP Apps / Gen UI           | All 16 `mcp/ui*` methods (sampling, app instances, page tools) have no bridge                                                                                                                                                                                              |
+| Process telemetry           | `process/*` (7 methods: networkCapture, resourceSample, toolExecResource, …) not forwarded                                                                                                                                                                                 |
+| Native ZCode plugin manager | All 20 `plugins/*` methods (install/update/marketplace/referenceCatalog/…) remain outside the bridge                                                                                                                                                                       |
+| Session and product gaps    | `session/goal` (the bridge answers `threadGoalClear: false`), Highspeed and Start/Team execution modes, rich diffs (generic rows), full subagent tree, archive/rename, service tier, billing cost, and `provider/testModelConnectivity` (health is not model connectivity) |
+
+These rows confirm the existing matrix sections below, which remain the
+authoritative baseline inventory together with the reproduced dispatch-level
+probes.
+
 ## Implementation update: v0.5.0
 
 The background-task and history priorities now have a bounded implementation:
@@ -232,6 +254,7 @@ change.
 
 [plugin-tree]: https://github.com/dpolishuk/bb-zcode/tree/7e8ce2d46976e6574e9136ce608d4c2182f824db
 [zcode-tree]: https://github.com/zai-org/ZCode/tree/aac4755666d09fdcd70272fcf063c077a639015f
+[zcode-main]: https://github.com/zai-org/ZCode/tree/3c5b227649371507ddc4eb46ac5133afe6db1cab
 [bb-tree]: https://github.com/get-bb/bb/tree/46da8461c107ee9dc95480a16fa17decaca2cc5d
 [ci]: https://github.com/dpolishuk/bb-zcode/actions/runs/39071157771
 [registration]: https://github.com/dpolishuk/bb-zcode/blob/7e8ce2d46976e6574e9136ce608d4c2182f824db/server.ts#L59-L83
