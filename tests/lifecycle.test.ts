@@ -765,7 +765,11 @@ it("commits bb rewind by forking a staged tip over the idle target", async () =>
 
 it("answers provider usage from sessionless discovery without a model prompt", async () => {
   const h = harness();
-  const r = await h.rpc("provider/usage", { providerId: "zcode", cwd: h.cwd });
+  const r = await h.rpc("provider/usage", {
+    providerId: "zcode",
+    cwd: h.cwd,
+    providerOptions: { executable: process.execPath },
+  });
   expect(record(r.result)).toMatchObject({
     supported: true,
     usage: { status: "ok", accountEmail: null, planLabel: null, windows: [] },
