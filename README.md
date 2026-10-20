@@ -172,8 +172,9 @@ implemented but has not received the same live verification.
 - Native forks and conversation rewind use stable checkpoints. Background Bash/agent
   cards and task commands survive foreground settlement. File rollback has separate
   preview/apply commands; see [configuration](docs/configuration.md).
-- Rich diffs, cost billing, archive/rename mirroring and a full subagent tree
-  remain unsupported.
+- File edits and reads, searches, web fetches, plan steps and delegations
+  render as rich bb rows; full unified-diff views, cost billing,
+  archive/rename mirroring and a full subagent tree remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

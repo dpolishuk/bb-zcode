@@ -92,6 +92,12 @@ checkpoint/fork, background-work, file-rollback, Coding Plan, and
 tool/skill/subagent checks passing. `bbThreadVerified` was false only because
 the opt-in disposable-bb environment variables were not set.
 
+v0.6.0 (rich tool rows, 2026-10-20): `npm run check` passed end to end on
+this machine for the first time (the desktop bb CLI supplies the builder) -
+**144 tests in 11 files**, marketplace consistency, typecheck, formatting,
+and the plugin build; `npm run test:live` again reported `RUNTIME_VERIFIED`
+with exit 0 against CLI 0.17.0.
+
 ## Related knowledge
 
 - Failure meanings and reproduction fixtures: [Diagnostics](diagnostics.md).

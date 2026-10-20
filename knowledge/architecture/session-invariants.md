@@ -70,18 +70,19 @@ matching tests and documentation updates (see
 
 Numeric limits enforced in code (values verified at commit `3dc639d`):
 
-| Bound                         | Value                                    | Enforced in                           |
-| ----------------------------- | ---------------------------------------- | ------------------------------------- |
-| Follow-up queue               | 32 pending inputs                        | `src/bridge.ts`                       |
-| Image inputs (local/data URL) | 16 MiB                                   | `src/input.ts`                        |
-| Tool-server request body      | 1 MiB (HTTP 413 beyond)                  | `src/tool-server.ts`                  |
-| bb tool call timeout          | 10 minutes                               | `src/bridge.ts`, `src/tool-server.ts` |
-| Bash output snapshot          | last 8192 bytes                          | `src/lifecycle.ts`                    |
-| File-rewind preview token     | 5 minutes, single-use, session-bound     | `src/lifecycle.ts`                    |
-| v4 history lookup             | 200 rows/page, ≤50 pages (= 10,000 rows) | `src/lifecycle.ts`                    |
-| bb tool catalog               | ≤256 tools, unique names                 | `src/tool-server.ts`                  |
-| bb skill catalog              | ≤128 roots, ≤1024 skills, ≤256 KiB JSON  | `src/skills.ts`                       |
-| Native request timeout        | 30 s default                             | `src/client.ts`                       |
+| Bound                         | Value                                           | Enforced in                           |
+| ----------------------------- | ----------------------------------------------- | ------------------------------------- |
+| Follow-up queue               | 32 pending inputs                               | `src/bridge.ts`                       |
+| Image inputs (local/data URL) | 16 MiB                                          | `src/input.ts`                        |
+| Tool-server request body      | 1 MiB (HTTP 413 beyond)                         | `src/tool-server.ts`                  |
+| bb tool call timeout          | 10 minutes                                      | `src/bridge.ts`, `src/tool-server.ts` |
+| Bash output snapshot          | last 8192 bytes                                 | `src/lifecycle.ts`                    |
+| File-rewind preview token     | 5 minutes, single-use, session-bound            | `src/lifecycle.ts`                    |
+| v4 history lookup             | 200 rows/page, ≤50 pages (= 10,000 rows)        | `src/lifecycle.ts`                    |
+| bb tool catalog               | ≤256 tools, unique names                        | `src/tool-server.ts`                  |
+| bb skill catalog              | ≤128 roots, ≤1024 skills, ≤256 KiB JSON         | `src/skills.ts`                       |
+| Rich row text (v0.6.0)        | 64 KiB per old/new text, 4 KiB labels/summaries | `src/timeline.ts`                     |
+| Native request timeout        | 30 s default                                    | `src/client.ts`                       |
 
 ## Related knowledge
 

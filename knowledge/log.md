@@ -21,3 +21,13 @@
   versus 0a1fc56) and the confirmed remaining feature gaps in
   docs/capability-audit.md; noted surface stability in
   [protocol contracts](contracts/protocol-contracts.md).
+- **Added** [Feature roadmap](decisions/feature-roadmap.md): the installed bb
+  SDK 0.6.49 is wider than the plugin used (archive/rename/goal bridge
+  methods, rich item shapes, a desktop browser host, plugin UI), with a
+  staged plan to close the audited gaps.
+- **Updated** v0.6.0 rich tool rows implemented in `src/timeline.ts`
+  (Edit/Write/Read/Grep/Glob/WebSearch/WebFetch/TodoWrite/Task mapped to
+  rich bb rows; failures fall back to generic rows). Baseline updated in
+  [change verification](runbooks/change-verification.md) (144 tests, full
+  `npm run check`, live smoke green); new text caps recorded in
+  [session invariants](architecture/session-invariants.md).

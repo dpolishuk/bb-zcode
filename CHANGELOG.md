@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-10-20
+
+- Render native coding tools as rich bb rows: file edits and writes with
+  old/new text, file reads, content and path search, web search and fetch,
+  plan steps translated from TodoWrite statuses, and Task delegations with
+  result summaries.
+- Keep failures explicit: errored or interrupted tools fall back to the
+  generic row so the error stays visible; unknown tools are unchanged.
+
 ## 0.5.0 — 2026-10-19
 
 - Track background Bash tasks and agent delegations across foreground turns;

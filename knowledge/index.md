@@ -18,6 +18,10 @@ not replace the user-facing [README](../README.md) or [docs/](../docs/).
 
 - [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions and translation rules.
 
+## Decisions
+
+- [Feature roadmap](decisions/feature-roadmap.md) - Prioritized plan for closing the audited capability gaps, grounded in what the installed bb SDK actually supports; stage 1 (rich tool rows) shipped in v0.6.0.
+
 ## Runbooks
 
 - [Change verification](runbooks/change-verification.md) - Which checks to run for which change, what CI runs, and the synthetic/live verification boundary.

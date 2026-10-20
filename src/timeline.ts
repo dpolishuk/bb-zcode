@@ -1,6 +1,14 @@
 import type {
   ThreadDelta,
   DeltaPresentation,
+  DeltaItemShape,
+} from "@get-bb/plugin-sdk/provider-bridge";
+import {
+  experimental_fileReadPresentation as sdkFileReadPresentation,
+  experimental_searchPresentation as sdkSearchPresentation,
+  experimental_webSearchPresentation as sdkWebSearchPresentation,
+  experimental_webFetchPresentation as sdkWebFetchPresentation,
+  experimental_planStepsPresentation as sdkPlanStepsPresentation,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { record, text } from "./protocol.js";
 
@@ -13,12 +21,165 @@ export const toolPresentation = (
   ...(detail ? { detail: detail.slice(0, 4000) } : {}),
 });
 
+/** Presentation-aware caps for model-generated text carried in rich rows. */
+const cap = (value: string, limit = 64 * 1024) => value.slice(0, limit);
+
+type Specialized = { item: DeltaItemShape; presentation: DeltaPresentation };
+
+/**
+ * Maps known native coding tools onto bb's rich row shapes. Unknown tools and
+ * inputs without the expected fields fall back to the generic tool row; a
+ * failed close also falls back so the error stays visible.
+ */
+function specialize(
+  name: string,
+  input: unknown,
+  toolCallId: string,
+): Specialized | undefined {
+  const args = record(input);
+  const path = text(args.file_path) || text(args.path);
+  switch (name) {
+    case "Read":
+      if (!path) return undefined;
+      return {
+        item: { type: "fileRead", path },
+        presentation: sdkFileReadPresentation(path),
+      };
+    case "Edit": {
+      if (!path) return undefined;
+      return {
+        item: {
+          type: "fileChange",
+          changes: [
+            {
+              kind: "update",
+              path,
+              ...(text(args.old_string)
+                ? { oldText: cap(text(args.old_string)) }
+                : {}),
+              ...(text(args.new_string)
+                ? { newText: cap(text(args.new_string)) }
+                : {}),
+            },
+          ],
+        },
+        presentation: toolPresentation("Edit", path),
+      };
+    }
+    case "Write":
+      if (!path) return undefined;
+      return {
+        item: {
+          type: "fileChange",
+          changes: [
+            {
+              kind: "update",
+              path,
+              ...(text(args.content)
+                ? { newText: cap(text(args.content)) }
+                : {}),
+            },
+          ],
+        },
+        presentation: toolPresentation("Write", path),
+      };
+    case "Grep":
+    case "Glob": {
+      const query = text(args.pattern) || text(args.query);
+      if (!query) return undefined;
+      const mode = name === "Grep" ? "content" : "path";
+      return {
+        item: {
+          type: "search",
+          query,
+          mode,
+          ...(path ? { path } : {}),
+        },
+        presentation: sdkSearchPresentation({ mode, query }),
+      };
+    }
+    case "WebSearch": {
+      const query = text(args.query);
+      if (!query) return undefined;
+      return {
+        item: { type: "webSearch", queries: [query] },
+        presentation: sdkWebSearchPresentation(query),
+      };
+    }
+    case "WebFetch": {
+      const url = text(args.url);
+      if (!url) return undefined;
+      return {
+        item: {
+          type: "webFetch",
+          url,
+          pattern: text(args.pattern) || null,
+          ...(text(args.prompt) ? { prompt: text(args.prompt) } : {}),
+        },
+        presentation: sdkWebFetchPresentation(url),
+      };
+    }
+    case "TodoWrite": {
+      const todos = Array.isArray(args.todos) ? args.todos : [];
+      const steps: Array<{
+        step: string;
+        status?: "completed" | "active" | "pending";
+      }> = [];
+      for (const todo of todos) {
+        const entry = record(todo);
+        const step = text(entry.content) || text(entry.subject);
+        if (!step) continue;
+        const status = text(entry.status);
+        steps.push({
+          step,
+          ...(status
+            ? {
+                status:
+                  status === "completed"
+                    ? ("completed" as const)
+                    : status === "in_progress"
+                      ? ("active" as const)
+                      : ("pending" as const),
+              }
+            : {}),
+        });
+      }
+      if (!steps.length) return undefined;
+      return {
+        item: { type: "planSteps", steps },
+        presentation: sdkPlanStepsPresentation(steps),
+      };
+    }
+    case "Task": {
+      const label =
+        text(args.description) || text(args.subagent_type) || "Subagent";
+      return {
+        item: {
+          type: "delegation",
+          label: cap(label, 4000),
+          childRef: toolCallId,
+          background: false,
+        },
+        presentation: toolPresentation(label),
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
 /** One translator per turn. Only the desktop-continuous event lane is consumed. */
 export class Timeline {
   private streams = new Map<string, "agentMessage" | "reasoningText">();
   private tools = new Map<
     string,
-    { name: string; input: unknown; parentRef?: string; output?: string }
+    {
+      name: string;
+      input: unknown;
+      parentRef?: string;
+      output?: string;
+      specialized?: Specialized;
+    }
   >();
   private hasText = false;
   private toolInputs = new Map<string, unknown>();
@@ -66,10 +227,15 @@ export class Timeline {
         const name = text(p.toolName, "ZCode tool");
         const input = p.input ?? this.toolInputs.get(id);
         this.toolInputs.delete(id);
+        const specialized =
+          name === "Bash" && typeof record(input).command === "string"
+            ? undefined
+            : specialize(name, input, id);
         this.tools.set(id, {
           name,
           input,
           ...(parentRef ? { parentRef } : {}),
+          ...(specialized ? { specialized } : {}),
         });
         this.emit([
           {
@@ -82,8 +248,12 @@ export class Timeline {
                     command: text(record(input).command),
                     cwd: this.cwd,
                   }
-                : { type: "tool", tool: name, args: input },
-            presentation: toolPresentation(name),
+                : (specialized?.item ?? {
+                    type: "tool",
+                    tool: name,
+                    args: input,
+                  }),
+            presentation: specialized?.presentation ?? toolPresentation(name),
           },
         ]);
       } else if (p.kind === "progress") {
@@ -118,39 +288,46 @@ export class Timeline {
               ? "Tool reported failure"
               : undefined;
         const commandOutput = [finalOutput, error].filter(Boolean).join("\n");
+        const spec = tool.specialized;
+        const closedItem: DeltaItemShape =
+          tool.name === "Bash" && typeof record(tool.input).command === "string"
+            ? {
+                type: "command",
+                command: text(record(tool.input).command),
+                cwd: this.cwd,
+                ...(typeof result.exitCode === "number"
+                  ? { exitCode: result.exitCode }
+                  : {}),
+                ...(commandOutput
+                  ? { aggregatedOutput: commandOutput.slice(-64 * 1024) }
+                  : {}),
+                ...(typeof p.duration === "number"
+                  ? { durationMs: p.duration }
+                  : {}),
+              }
+            : error || !spec
+              ? {
+                  type: "tool",
+                  tool: tool.name,
+                  args: tool.input,
+                  result: p.result,
+                  ...(error ? { error } : {}),
+                  ...(typeof p.duration === "number"
+                    ? { durationMs: p.duration }
+                    : {}),
+                }
+              : spec.item.type === "delegation" &&
+                  tool.name === "Task" &&
+                  finalOutput
+                ? { ...spec.item, summary: cap(finalOutput, 4000) }
+                : spec.item;
         this.emit([
           {
             kind: "item.close",
             key,
             status: error ? "failed" : "completed",
-            item:
-              tool.name === "Bash" &&
-              typeof record(tool.input).command === "string"
-                ? {
-                    type: "command",
-                    command: text(record(tool.input).command),
-                    cwd: this.cwd,
-                    ...(typeof result.exitCode === "number"
-                      ? { exitCode: result.exitCode }
-                      : {}),
-                    ...(commandOutput
-                      ? { aggregatedOutput: commandOutput.slice(-64 * 1024) }
-                      : {}),
-                    ...(typeof p.duration === "number"
-                      ? { durationMs: p.duration }
-                      : {}),
-                  }
-                : {
-                    type: "tool",
-                    tool: tool.name,
-                    args: tool.input,
-                    result: p.result,
-                    ...(error ? { error } : {}),
-                    ...(typeof p.duration === "number"
-                      ? { durationMs: p.duration }
-                      : {}),
-                  },
-            presentation: toolPresentation(tool.name),
+            item: closedItem,
+            presentation: spec?.presentation ?? toolPresentation(tool.name),
           },
         ]);
         this.tools.delete(id);
