@@ -59,10 +59,13 @@ export interface AccountHost {
   authorize(raw: unknown, sessionId: string): Promise<unknown>;
   authorizeOfficialMcp?(raw: unknown, cwd: string): Promise<unknown>;
   close(): void;
+  /** Label of the active subscription, when an account host verified one. */
+  readonly planLabel?: string | null;
 }
 
 /** Implements ZCode's desktop-host contract for individual Coding Plan only. */
 export class CodingPlanHost implements AccountHost {
+  planLabel: string | null = null;
   private controller = new AbortController();
   private provider?: Provider;
   private login?: Login;
@@ -294,22 +297,24 @@ export class CodingPlanHost implements AccountHost {
       undefined,
       true,
     );
-    if (
-      !Array.isArray(subscriptions) ||
-      !subscriptions
-        .map(record)
-        .some(
-          (s) =>
-            [s.productId, s.productName].some((name) =>
-              text(name).toLowerCase().includes("coding"),
-            ) &&
-            s.status === "VALID" &&
-            s.inCurrentPeriod === true,
-        )
-    )
+    const active = Array.isArray(subscriptions)
+      ? subscriptions
+          .map(record)
+          .find(
+            (s) =>
+              [s.productId, s.productName].some((name) =>
+                text(name).toLowerCase().includes("coding"),
+              ) &&
+              s.status === "VALID" &&
+              s.inCurrentPeriod === true,
+          )
+      : undefined;
+    if (!active)
       throw failure(
         "an active individual Coding Plan subscription could not be verified.",
       );
+    this.planLabel =
+      text(active.productName) || text(active.productId) || "Coding Plan";
     await this.assertCurrent();
     return {
       token,

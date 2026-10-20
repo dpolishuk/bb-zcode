@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 — 2026-10-20
+
+- Answer bb's provider usage panel from sessionless discovery: account status
+  and the active individual Coding Plan subscription label, with no invented
+  usage numbers, quotas or spend.
+- Add `/zcode-check [providerId/modelId]` to run ZCode's native model
+  connectivity test on demand - one real model request, no session prompt.
+- Health guidance now points to `/zcode-check` instead of only stating that
+  model connectivity is untested.
+
 ## 0.6.0 — 2026-10-20
 
 - Render native coding tools as rich bb rows: file edits and writes with

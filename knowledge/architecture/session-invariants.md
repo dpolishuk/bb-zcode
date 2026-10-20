@@ -82,6 +82,7 @@ Numeric limits enforced in code (values verified at commit `3dc639d`):
 | bb tool catalog               | ≤256 tools, unique names                        | `src/tool-server.ts`                  |
 | bb skill catalog              | ≤128 roots, ≤1024 skills, ≤256 KiB JSON         | `src/skills.ts`                       |
 | Rich row text (v0.6.0)        | 64 KiB per old/new text, 4 KiB labels/summaries | `src/timeline.ts`                     |
+| Connectivity check (v0.7.0)   | 60 s timeout, one real model request            | `src/bridge.ts`                       |
 | Native request timeout        | 30 s default                                    | `src/client.ts`                       |
 
 ## Related knowledge

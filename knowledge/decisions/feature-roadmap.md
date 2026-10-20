@@ -46,12 +46,14 @@ back to the generic tool row so errors stay visible; unknown tools are
 unchanged. Remaining presentation gaps: full unified-diff views (bb renders
 `oldText`/`newText` itself), richer delegation summaries.
 
-## Stage 2 — honest provider maintenance
+## Stage 2 — honest provider maintenance (done in v0.7.0)
 
-Use `provider/usage` and native `provider/testModelConnectivity` so health
-stops being "protocol responds" and quotas/identity become queryable. Small,
-self-contained; update the health caveat in
-[docs/configuration.md](../../docs/configuration.md) when done.
+`provider/usage` now answers from sessionless discovery: account status plus
+the active individual Coding Plan subscription label (captured in
+`src/coding-plan.ts`), with empty windows rather than invented numbers.
+`/zcode-check [providerId/modelId]` runs the native
+`provider/testModelConnectivity` on demand - one real model request, no
+session prompt - and health guidance points to it.
 
 ## Stage 3 — lifecycle parity
 

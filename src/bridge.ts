@@ -37,6 +37,7 @@ import {
   DEFAULT_MODEL,
   RUNTIME_PREFERENCES,
   modelForTurn,
+  selectedModel,
   type Snapshot,
 } from "./protocol.js";
 import { Timeline, toolPresentation } from "./timeline.js";
@@ -95,6 +96,7 @@ const schemas: Record<string, z.ZodType> = {
   initialize: initializeParamsSchema,
   "model/list": modelListParamsSchema,
   "provider/health": providerMaintenanceParamsSchema,
+  "provider/usage": providerMaintenanceParamsSchema,
   "thread/start": threadStartParamsSchema,
   "thread/resume": threadResumeParamsSchema,
   "thread/fork": threadForkParamsSchema,
@@ -110,6 +112,24 @@ const modeFor = (options: BridgeExecutionOptions) =>
     : options.permissionMode === "full"
       ? "yolo"
       : "build";
+
+/** The native probe performs one real model request; keep it explicit. */
+async function checkConnectivity(session: Session, argument: string) {
+  const selection = argument
+    ? selectedModel(argument)
+    : session.snapshot.settings.model.current;
+  if (!selection)
+    throw new ProtocolError(
+      "No ZCode model is selected. Pick a model, then run /zcode-check.",
+      -32000,
+    );
+  await session.client.request(
+    "provider/testModelConnectivity",
+    { workspace: workspaceRef(session.cwd), selection },
+    60_000,
+  );
+  return `ZCode verified connectivity for ${selection.providerId}/${selection.modelId}. This ran one real model request.`;
+}
 
 export function createBridge(
   config: {
@@ -891,7 +911,7 @@ export function createBridge(
       const prompt = material.content;
       const command =
         !material.attachments &&
-        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind)(?:\s+(.*))?$/.exec(
+        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check)(?:\s+(.*))?$/.exec(
           prompt.trim(),
         );
       if (command) {
@@ -916,7 +936,9 @@ export function createBridge(
             ? await session.history.previewFiles(argument || undefined)
             : command[1] === "zcode-file-rewind"
               ? await session.history.rewindFiles(argument)
-              : await session.background.manage(command[1]!, argument);
+              : command[1] === "zcode-check"
+                ? await checkConnectivity(session, argument)
+                : await session.background.manage(command[1]!, argument);
         if (session.stopping)
           throw new Error("Session stopped while managing tasks.");
         if (clientRequestId) session.accepted.add(clientRequestId);
@@ -1153,7 +1175,7 @@ export function createBridge(
         )
       )
         throw new Error(accountError);
-      return snapshot;
+      return { snapshot, planLabel: account.planLabel ?? null };
     } finally {
       account.close();
       await client.close();
@@ -1199,7 +1221,7 @@ export function createBridge(
     if (method === "model/list" || method === "provider/health") {
       const p = record(parsed.data);
       try {
-        const snapshot = await probe(p, text(p.cwd) || homedir());
+        const { snapshot } = await probe(p, text(p.cwd) || homedir());
         const available = snapshot.settings.model.available.filter(
           (model) => !model.disabledReason,
         );
@@ -1248,7 +1270,7 @@ export function createBridge(
             health: {
               status: available.length ? "ready" : "unauthenticated",
               statusMessage: available.length
-                ? "ZCode protocol responds. Model connectivity has not been tested."
+                ? "ZCode protocol responds. Use /zcode-check in an idle session to test model connectivity."
                 : "ZCode responds; configure a personal API provider to run prompts.",
               accountEmail: null,
               planLabel: null,
@@ -1274,6 +1296,36 @@ export function createBridge(
             canInstall: false,
             canUpdate: false,
             loginCommand: null,
+          },
+        });
+      }
+      return;
+    }
+    if (method === "provider/usage") {
+      const p = record(parsed.data);
+      try {
+        const { snapshot, planLabel } = await probe(
+          p,
+          text(p.cwd) || homedir(),
+        );
+        const available = snapshot.settings.model.available.filter(
+          (model) => !model.disabledReason,
+        );
+        result(id, {
+          supported: true,
+          usage: available.length
+            ? { status: "ok", accountEmail: null, planLabel, windows: [] }
+            : { status: "unauthenticated" },
+        });
+      } catch (failure) {
+        result(id, {
+          supported: true,
+          usage: {
+            status: "error",
+            message:
+              failure instanceof Error ? failure.message : "ZCode probe failed",
+            accountEmail: null,
+            planLabel: null,
           },
         });
       }

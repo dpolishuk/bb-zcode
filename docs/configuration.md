@@ -42,6 +42,9 @@ default, as required by bb's bridge contract.
 The fallback **ZCode models unavailable** entry appears while the catalog is
 unavailable. It does not prove that a provider is authenticated. Likewise,
 health checks verify protocol/catalog availability, not model connectivity.
+Run `/zcode-check` in an idle session to perform one real connectivity
+request; the provider usage panel reports account status and the active
+Coding Plan label without invented usage numbers.
 
 ## Individual Coding Plan
 
@@ -274,9 +277,12 @@ Provider commands appear in bb's command menu and `bb thread commands`:
 | `/zcode-task-stop <id>`              | Request cancellation of one active, cancellable task                         |
 | `/zcode-file-preview [checkpoint]`   | Preview native file rollback for a turn; defaults to the latest stable reply |
 | `/zcode-file-rewind <preview-token>` | Apply the previewed file-only rollback in Full Access mode                   |
+| `/zcode-check [providerId/modelId]`  | Run ZCode's native model connectivity test; one real model request           |
 
 Management commands run when the foreground is idle and do not submit a model
-prompt. ZCode can independently notify its model when background work completes
+prompt; `/zcode-check` is the exception in effect - it submits no session
+prompt but does perform one real model request through ZCode. ZCode can
+independently notify its model when background work completes
 or is cancelled, which can produce an additional native turn and usage.
 Agent output is available as task summaries; Bash output retrieval is scoped
 by native session/work IDs, and never reads a caller-supplied filesystem path.

@@ -31,3 +31,9 @@
   [change verification](runbooks/change-verification.md) (144 tests, full
   `npm run check`, live smoke green); new text caps recorded in
   [session invariants](architecture/session-invariants.md).
+- **Updated** v0.7.0 honest provider maintenance: `provider/usage` answered
+  from sessionless discovery (status + Coding Plan label, no invented
+  numbers) and `/zcode-check` added to run the native connectivity test on
+  demand. Stage 2 marked done in the
+  [feature roadmap](decisions/feature-roadmap.md); baseline and bounds
+  updated.

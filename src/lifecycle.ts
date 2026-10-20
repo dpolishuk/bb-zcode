@@ -324,6 +324,12 @@ export const managementCommands: Array<Record<string, string>> = [
     description: "Cancel one native background task",
     inputHint: "<task-id>",
   },
+  {
+    name: "zcode-check",
+    description:
+      "Test native model connectivity with one real request (idle session)",
+    inputHint: "[providerId/modelId]",
+  },
 ];
 export class BackgroundWork {
   private jobs = new Map<

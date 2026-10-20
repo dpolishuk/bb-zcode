@@ -119,7 +119,7 @@ export default async function plugin(bb: BbPluginApi) {
         installUrl: "https://github.com/zai-org/ZCode",
         planModeCopy: "ZCode will inspect the workspace and prepare a plan.",
       },
-      maintenance: { health: true, usage: false, installation: false },
+      maintenance: { health: true, usage: true, installation: false },
       capabilities: {
         permissionModes: ["accept-edits", "auto", "full"],
         // This is bb's coarse validation ladder. model/list supplies each

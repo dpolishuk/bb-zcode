@@ -175,6 +175,9 @@ implemented but has not received the same live verification.
 - File edits and reads, searches, web fetches, plan steps and delegations
   render as rich bb rows; full unified-diff views, cost billing,
   archive/rename mirroring and a full subagent tree remain unsupported.
+- The provider usage panel reports account status and the Coding Plan label
+  without invented numbers, and `/zcode-check` runs ZCode's native
+  connectivity test with one real model request.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

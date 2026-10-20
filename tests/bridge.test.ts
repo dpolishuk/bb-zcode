@@ -308,3 +308,26 @@ it("rejects a mismatched provider identity", async () => {
   });
   expect(record(reply.error).code).toBe(-32602);
 });
+
+it("reports provider usage with the account plan label", async () => {
+  const h = harness({
+    accountFactory: () => ({
+      planLabel: "Coding Plan Fixture",
+      async initialize() {},
+      async authorize() {
+        return { headersApplied: false };
+      },
+      close() {},
+    }),
+  });
+  const r = await h.rpc("provider/usage", { providerId: "zcode" });
+  expect(record(r.result)).toMatchObject({
+    supported: true,
+    usage: {
+      status: "ok",
+      planLabel: "Coding Plan Fixture",
+      accountEmail: null,
+      windows: [],
+    },
+  });
+});

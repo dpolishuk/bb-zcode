@@ -102,3 +102,7 @@ with exit 0 against CLI 0.17.0.
 
 - Failure meanings and reproduction fixtures: [Diagnostics](diagnostics.md).
 - Contracts a change may break: [Protocol contracts](../contracts/protocol-contracts.md).
+
+v0.7.0 (provider usage and `/zcode-check`, 2026-10-20): **148 tests in 11
+files**, marketplace consistency, typecheck, formatting and the plugin build
+all green; the live smoke stays `RUNTIME_VERIFIED` against CLI 0.17.0.

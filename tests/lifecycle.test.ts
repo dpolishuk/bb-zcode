@@ -762,3 +762,43 @@ it("commits bb rewind by forking a staged tip over the idle target", async () =>
     h.sessions.get(String(record(committed.result).providerThreadId))!.rows,
   ).toHaveLength(1);
 });
+
+it("answers provider usage from sessionless discovery without a model prompt", async () => {
+  const h = harness();
+  const r = await h.rpc("provider/usage", { providerId: "zcode", cwd: h.cwd });
+  expect(record(r.result)).toMatchObject({
+    supported: true,
+    usage: { status: "ok", accountEmail: null, planLabel: null, windows: [] },
+  });
+  expect(h.calls.some((c) => c.method === "session/send")).toBe(false);
+});
+
+it("tests model connectivity explicitly through /zcode-check", async () => {
+  const h = harness(),
+    id = await h.start();
+  const r = await h.send(id, "/zcode-check");
+  expect(r.error).toBeUndefined();
+  expect(
+    h.calls.find((c) => c.method === "provider/testModelConnectivity"),
+  ).toMatchObject({
+    params: { selection: { providerId: "test", modelId: "model" } },
+  });
+  expect(h.calls.some((c) => c.method === "session/send")).toBe(false);
+  expect(h.deltas().some((d) => String(d.text).includes("test/model"))).toBe(
+    true,
+  );
+});
+
+it("accepts an explicit model in /zcode-check and rejects malformed ids", async () => {
+  const h = harness(),
+    id = await h.start();
+  const ok = await h.send(id, "/zcode-check other/model");
+  expect(ok.error).toBeUndefined();
+  expect(
+    h.calls
+      .filter((c) => c.method === "provider/testModelConnectivity")
+      .some((c) => record(c.params.selection).providerId === "other"),
+  ).toBe(true);
+  const bad = await h.send(id, "/zcode-check noslashes");
+  expect(bad.error).toBeDefined();
+});
