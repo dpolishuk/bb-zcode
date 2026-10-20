@@ -141,13 +141,13 @@ overrides, permission modes, and troubleshooting.
 
 ## Compatibility
 
-| Component     | Tested with                 |
-| ------------- | --------------------------- |
-| bb            | 0.46.1                      |
-| bb plugin SDK | 0.6.49                      |
-| ZCode CLI     | 0.16.9 · native protocol v1 |
-| Platform      | macOS                       |
-| CLI runtime   | Node.js 24 and 26.5.0       |
+| Component     | Tested with                            |
+| ------------- | -------------------------------------- |
+| bb            | 0.46.1                                 |
+| bb plugin SDK | 0.6.49                                 |
+| ZCode CLI     | 0.16.9 and 0.17.0 · native protocol v1 |
+| Platform      | macOS                                  |
+| CLI runtime   | Node.js 24 and 26.5.0                  |
 
 Automated tests cover the bridge contract, streaming, approvals,
 questions, cancellation, resume, account authentication, and transport failures.

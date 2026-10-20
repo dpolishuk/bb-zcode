@@ -1,6 +1,6 @@
 # Validation record
 
-Verified locally on 2026-10-17 through 2026-10-19, macOS. The checks below cover the source
+Verified locally on 2026-10-17 through 2026-10-20, macOS. The checks below cover the source
 checkout, an isolated real-CLI smoke, and installation from the published
 marketplace. Model connectivity remains a separate verification boundary.
 
@@ -10,7 +10,7 @@ marketplace. Model connectivity remains a separate verification boundary.
 | ----------------------------------- | ------------------------- |
 | bb desktop / bundled plugin builder | 0.46.1                    |
 | Published `@get-bb/plugin-sdk`      | 0.6.49                    |
-| Installed ZCode CLI                 | 0.16.9                    |
+| Installed ZCode CLI                 | 0.16.9; 0.17.0 re-checked |
 | ZCode protocol reported by the CLI  | ZCode Protocol, version 1 |
 | bb bridge / deltas                  | Protocol 2 / grammar 3    |
 | Node used for the full bb smoke     | 26.5.0                    |
@@ -25,6 +25,28 @@ Reference source snapshots:
 
 The published SDK and installed applications, rather than an assumed source
 build, were used for the runtime checks.
+
+## Compatibility re-check: ZCode CLI 0.17.0 (2026-10-20)
+
+The ZCode desktop app auto-updated to 3.16.2 with CLI bundle `0.17.0`, and
+`zcode` is no longer on PATH; the plugin's macOS bundle fallback resolves the
+installed CLI without configuration changes. `npm run test:live` was run twice
+on Node 26.5.0 against this CLI and reported `RUNTIME_VERIFIED` with exit 0:
+protocol "ZCode Protocol" version 1, 27 synthetic model requests, and the full
+check set - direct CLI session create/subscribe/setMode/stream/shutdown/cold
+resume, attachments, queued follow-ups, usage/context, compaction, MCP tool
+execution, bridge text prompt and effort selection, stable checkpoints,
+native fork continuation and cold checkpoint fork, background Bash
+list/output/cancel with the automatic native follow-up, file preview and
+temporary-fixture rollback, release and cold resume, Coding Plan authorization
+with one authenticated model request, and the bb tool, skill, Bash-output and
+custom subagent paths. The disposable-bb part (`bbThreadVerified`) was not
+run; it requires the opt-in `BB_SMOKE_*` environment.
+
+Upstream `main` still declares `ZCODE_PROTOCOL_VERSION = 1` and keeps the
+legacy session methods the adapter uses, under deletion-boundary comments,
+with v4 wire version 3 coexisting. Paid production inference remains
+**UNVERIFIED**, as do Linux and Windows.
 
 ## v0.5.0: background management and history controls
 

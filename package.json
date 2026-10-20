@@ -50,8 +50,8 @@
     "marketplace:build": "node scripts/marketplace.mjs",
     "marketplace:check": "node scripts/marketplace.mjs --check",
     "check": "npm run marketplace:check && npm run typecheck && npm test && npm run build",
-    "format": "prettier --write server.ts src tests scripts docs skills README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github",
-    "format:check": "prettier --check server.ts src tests scripts docs skills README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github"
+    "format": "prettier --write server.ts src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github",
+    "format:check": "prettier --check server.ts src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github"
   },
   "dependencies": {
     "@get-bb/plugin-sdk": "0.6.49",

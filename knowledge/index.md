@@ -1,0 +1,37 @@
+---
+okf_version: "0.2"
+---
+
+# bb-zcode knowledge base
+
+Agent-oriented engineering knowledge for this repository, maintained in
+[Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/ad30107c31c06aec8a7d5636e0d1058118604e6f/SPEC.md).
+It distills what the source, tests, and validation records establish; it does
+not replace the user-facing [README](../README.md) or [docs/](../docs/).
+
+## Architecture
+
+- [System overview](architecture/system-overview.md) - Entry points, the per-thread supervised ZCode process, and the responsibility of each `src/` module.
+- [Session invariants](architecture/session-invariants.md) - Behaviors every change must preserve: explicit failure, credential containment, and hard numeric bounds.
+
+## Contracts
+
+- [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions and translation rules.
+
+## Runbooks
+
+- [Change verification](runbooks/change-verification.md) - Which checks to run for which change, what CI runs, and the synthetic/live verification boundary.
+- [Diagnostics](runbooks/diagnostics.md) - Error-message ownership map, reproduction fixtures, and interpretation rules.
+
+## Source material outside the bundle
+
+Large documents are referenced, not duplicated:
+
+- [README](../README.md) - product overview, install paths, compatibility.
+- [docs/configuration.md](../docs/configuration.md) - settings, permissions, background work, troubleshooting.
+- [docs/validation.md](../docs/validation.md) - dated validation record with versions and evidence.
+- [docs/capability-audit.md](../docs/capability-audit.md) - feature matrix with evidence labels.
+- [docs/marketplace.md](../docs/marketplace.md) - marketplace sources and catalog maintenance.
+- [CONTRIBUTING.md](../CONTRIBUTING.md) and [CHANGELOG.md](../CHANGELOG.md) - workflow rules and release history.
+
+Update history: [log.md](log.md).
