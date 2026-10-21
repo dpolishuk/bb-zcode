@@ -173,11 +173,15 @@ implemented but has not received the same live verification.
   cards and task commands survive foreground settlement. File rollback has separate
   preview/apply commands; see [configuration](docs/configuration.md).
 - File edits and reads, searches, web fetches, plan steps and delegations
-  render as rich bb rows; full unified-diff views, cost billing,
-  archive/rename mirroring and a full subagent tree remain unsupported.
+  render as rich bb rows; full unified-diff views, cost billing and a full
+  subagent tree remain unsupported.
 - The provider usage panel reports account status and the Coding Plan label
   without invented numbers, and `/zcode-check` runs ZCode's native
   connectivity test with one real model request.
+- bb archive and rename actions work, with names and archive state kept in
+  bb (ZCode title generation stays off); clearing a thread goal calls the
+  native session goal action. Full unified-diff views, cost billing and a
+  full subagent tree remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

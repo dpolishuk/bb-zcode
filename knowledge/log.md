@@ -37,3 +37,7 @@
   demand. Stage 2 marked done in the
   [feature roadmap](decisions/feature-roadmap.md); baseline and bounds
   updated.
+- **Updated** v0.8.0 lifecycle parity: bb-local archive/unarchive/rename acks
+  and `thread/goal/clear` → native `session/goal` clear. Stage 3 marked done
+  in the [feature roadmap](decisions/feature-roadmap.md) with the bb-0.46.1
+  runtime finding; baseline updated to 151 tests.

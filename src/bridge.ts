@@ -10,6 +10,10 @@ import {
   threadForkParamsSchema,
   threadStopParamsSchema,
   threadDiscardParamsSchema,
+  threadArchiveParamsSchema,
+  threadUnarchiveParamsSchema,
+  threadNameSetParamsSchema,
+  threadGoalClearParamsSchema,
   turnStartParamsSchema,
   turnSteerParamsSchema,
   skillsConfigureParamsSchema,
@@ -102,6 +106,10 @@ const schemas: Record<string, z.ZodType> = {
   "thread/fork": threadForkParamsSchema,
   "thread/stop": threadStopParamsSchema,
   "thread/discard": threadDiscardParamsSchema,
+  "thread/archive": threadArchiveParamsSchema,
+  "thread/unarchive": threadUnarchiveParamsSchema,
+  "thread/name/set": threadNameSetParamsSchema,
+  "thread/goal/clear": threadGoalClearParamsSchema,
   "turn/start": turnStartParamsSchema,
   "turn/steer": turnSteerParamsSchema,
   "skills/configure": skillsConfigureParamsSchema,
@@ -1202,9 +1210,9 @@ export function createBridge(
         capabilities: {
           grammarVersions: [3, 3],
           sessionRestore: true,
-          threadArchive: false,
-          threadRename: false,
-          threadGoalClear: false,
+          threadArchive: true,
+          threadRename: true,
+          threadGoalClear: true,
           fork: "checkpoint",
           approvalEnforcedBy: "runtime",
           steerMode: "queue",
@@ -1329,6 +1337,36 @@ export function createBridge(
           },
         });
       }
+      return;
+    }
+    if (
+      method === "thread/archive" ||
+      method === "thread/unarchive" ||
+      method === "thread/name/set"
+    ) {
+      // bb owns thread labels and archive state; native title generation stays
+      // off, so nothing native is mirrored or overwritten here.
+      result(id, {});
+      return;
+    }
+    if (method === "thread/goal/clear") {
+      const params = parsed.data as z.infer<typeof threadGoalClearParamsSchema>;
+      const session = sessions.get(params.threadId);
+      if (!session || session.providerThreadId !== params.providerThreadId)
+        throw new ProtocolError(
+          "Goal clearing needs the thread's active ZCode session; resume it first.",
+          -32602,
+        );
+      if (session.starting || session.stopping || session.draining)
+        throw new ProtocolError(
+          "ZCode is busy. Wait for the turn to finish or stop it.",
+          -32000,
+        );
+      await session.client.request("session/goal", {
+        sessionId: session.providerThreadId,
+        action: "clear",
+      });
+      result(id, {});
       return;
     }
     if (method === "thread/fork") {

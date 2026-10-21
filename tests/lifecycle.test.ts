@@ -806,3 +806,44 @@ it("accepts an explicit model in /zcode-check and rejects malformed ids", async 
   const bad = await h.send(id, "/zcode-check noslashes");
   expect(bad.error).toBeDefined();
 });
+
+it("acks bb-local archive, unarchive and rename without native calls", async () => {
+  const h = harness();
+  for (const method of [
+    "thread/archive",
+    "thread/unarchive",
+    "thread/name/set",
+  ]) {
+    const r = await h.rpc(method, {
+      threadId: "thread",
+      providerThreadId: "native-1",
+      ...(method === "thread/name/set" ? { title: "Renamed" } : {}),
+    });
+    expect(r.error, method).toBeUndefined();
+  }
+  expect(h.calls).toHaveLength(0);
+});
+
+it("clears native goals through thread/goal/clear with an active session", async () => {
+  const h = harness(),
+    id = await h.start();
+  const r = await h.rpc("thread/goal/clear", {
+    threadId: "thread",
+    providerThreadId: id,
+  });
+  expect(r.error).toBeUndefined();
+  expect(h.calls.find((c) => c.method === "session/goal")).toMatchObject({
+    params: { sessionId: id, action: "clear" },
+  });
+  expect(h.calls.some((c) => c.method === "session/send")).toBe(false);
+});
+
+it("rejects goal clearing without the thread's active session", async () => {
+  const h = harness();
+  const r = await h.rpc("thread/goal/clear", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+  });
+  expect(r.error).toBeDefined();
+  expect(h.calls.some((c) => c.method === "session/goal")).toBe(false);
+});

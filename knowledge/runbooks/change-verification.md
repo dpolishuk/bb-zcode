@@ -106,3 +106,8 @@ with exit 0 against CLI 0.17.0.
 v0.7.0 (provider usage and `/zcode-check`, 2026-10-20): **148 tests in 11
 files**, marketplace consistency, typecheck, formatting and the plugin build
 all green; the live smoke stays `RUNTIME_VERIFIED` against CLI 0.17.0.
+
+v0.8.0 (bb-local archive/rename and goal clearing, 2026-10-20): **151 tests
+in 11 files**, full `npm run check` and the live smoke green. The bb 0.46.1
+runtime asar was inspected to confirm it does not yet send
+`thread/archive|unarchive|name/set|goal/clear` requests.

@@ -212,6 +212,11 @@ non-restorable because ZCode does not persist them until a turn starts. Saved
 conversations resume by native session ID; resume failure is reported rather
 than silently replacing the conversation.
 
+bb archive, unarchive and rename actions are bb-local: the native protocol
+has no title or archive API, ZCode title generation stays off, and names
+live in bb. Clearing a thread goal calls the native `session/goal` clear
+action and requires that thread's active session.
+
 ## Troubleshooting
 
 | Symptom                          | What to check                                                                                       |

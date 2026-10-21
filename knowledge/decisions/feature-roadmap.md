@@ -55,12 +55,17 @@ the active individual Coding Plan subscription label (captured in
 `provider/testModelConnectivity` on demand - one real model request, no
 session prompt - and health guidance points to it.
 
-## Stage 3 — lifecycle parity
+## Stage 3 — lifecycle parity (done in v0.8.0)
 
-Implement `thread/archive`/`thread/unarchive`/`thread/name/set` (bb methods
-exist; flip the `supportsThreadArchive/Rename` capability flags) and bridge
-`session/goal` to `thread/goal/clear` (replace the `threadGoalClear: false`
-answer in `src/bridge.ts`).
+`thread/archive`, `thread/unarchive` and `thread/name/set` are implemented as
+bb-local acks - the native legacy protocol has no title or archive API, and
+title generation stays off, so bb owns names and archive state. Verified in
+the installed bb 0.46.1 runtime that it does not send these requests yet (the
+schemas are forward compatibility); the handlers define behavior for future
+bb versions. `thread/goal/clear` maps to the native `session/goal` clear
+action and requires the thread's active session. Native goal state is not
+mirrored into bb timeline deltas (no native goal push events); that remains
+follow-up work with the v4 snapshot surface.
 
 ## Stage 4 — native plugin management commands
 

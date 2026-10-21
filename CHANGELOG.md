@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 — 2026-10-20
+
+- Support bb thread archive, unarchive and rename actions. Names and archive
+  state are bb-local by design: the native protocol has no title or archive
+  API, and ZCode title generation stays off, so nothing is overwritten.
+- Bridge `thread/goal/clear` to the native `session/goal` clear action; it
+  requires the thread's active ZCode session and propagates native errors.
+- Advertise `threadArchive`, `threadRename` and `threadGoalClear` in the
+  bridge handshake and provider declaration.
+
 ## 0.7.0 — 2026-10-20
 
 - Answer bb's provider usage panel from sessionless discovery: account status
