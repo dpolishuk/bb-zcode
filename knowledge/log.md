@@ -62,3 +62,6 @@
   (a vertex lay on its own edge), so fill rules rendered only hairline
   slivers. Rebuilt as three simple overlapping shapes; verified at 512 px
   and 64 px.
+- **Fixed** v0.9.4 provider mark geometry: terminal cuts are now parallel and
+  lean the same way as the ZCode app mark (top-left and bottom-right tips
+  lead), with reference-matched bar and diagonal weights.

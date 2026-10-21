@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4 — 2026-10-20
+
+- Match the ZCode app mark exactly: both terminal cuts now lean the same way
+  (the top-left tip leads on the top bar, the bottom-right tip on the bottom
+  bar), and the bars and diagonal carry the reference weights.
+
 ## 0.9.3 — 2026-10-20
 
 - Fix the provider mark: the first Z polygon was self-touching, which fill
