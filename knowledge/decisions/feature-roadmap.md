@@ -86,7 +86,8 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
   carries no browser/host RPCs, and the main SDK's browser APIs
   (`ExperimentalDesktopBrowsersArea` etc.) serve plugin UI webview contexts,
   not provider bridge workers. Full bridging therefore waits on an upstream
-  bb extension. What shipped in v0.9.1: `interaction/browserList|Execute`,
+  bb extension - requested in [get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)
+  (2026-10-20). What shipped in v0.9.1: `interaction/browserList|Execute`,
   `automation/*`, `offPeak/*`, `bot/channel/reply` and `mcp/ui*` reverse RPCs
   are rejected uniformly with an actionable message pointing to ZCode
   Desktop. The remaining design option that does not need bb is a
@@ -104,6 +105,14 @@ Full native-scheduler parity is not promised.
 
 Map `mcp/ui*` (16 methods) onto bb plugin UI surfaces (fixed tabs, browser
 pages). Long-term; upstream itself limits interactive pages.
+
+## Stages 6-7 — same upstream blocker
+
+Automations/Off-Peak (stage 6) and MCP Apps / Gen UI (stage 7) hit the same
+wall: they are CLI→host reverse RPCs with no channel through the provider
+bridge. They are covered by the same upstream request
+([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)); no further
+plugin-side work is possible until bb answers.
 
 ## Out of scope for this plugin
 

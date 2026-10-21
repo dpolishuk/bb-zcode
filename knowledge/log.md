@@ -49,3 +49,8 @@
   Off-Peak, topics, MCP Apps) now fail with actionable messages; stage 5 of
   the [feature roadmap](decisions/feature-roadmap.md) recorded as blocked on
   bb with SDK evidence (no host-service channel in the bridge protocol).
+- **Added** Upstream feature request
+  [get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008): a host-service
+  channel in the provider bridge, with SDK evidence and the concrete native
+  ports. Stages 5-7 of the [feature roadmap](decisions/feature-roadmap.md)
+  now track this issue as their unblock condition.
