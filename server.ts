@@ -110,7 +110,7 @@ export default async function plugin(bb: BbPluginApi) {
     registered = bb.providers.register({
       id: "zcode",
       displayName: "ZCode",
-      icon: "Terminal",
+      icon: "./icons/zcode.svg",
       strings: {
         signInHint:
           "Sign in to individual Coding Plan in ZCode Desktop on this machine, or configure a personal API provider.",

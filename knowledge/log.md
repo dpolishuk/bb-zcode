@@ -54,3 +54,7 @@
   channel in the provider bridge, with SDK evidence and the concrete native
   ports. Stages 5-7 of the [feature roadmap](decisions/feature-roadmap.md)
   now track this issue as their unblock condition.
+- **Added** Custom provider mark in v0.9.2: `icons/zcode.svg` - a bold
+  angular Z with slash-cut terminals in ZCode's monochrome style, rendered as
+  a themed currentColor mask; the marketplace catalog carries it as a plugin
+  asset URL instead of the Terminal glyph.

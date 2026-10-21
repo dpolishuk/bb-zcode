@@ -117,3 +117,7 @@ files**, full `npm run check` and the live smoke green.
 
 v0.9.1 (actionable host-service errors, 2026-10-20): **156 tests in 11
 files**, full `npm run check` and the live smoke green.
+
+v0.9.2 (custom provider icon, 2026-10-20): **156 tests in 11 files**, full
+`npm run check` and the live smoke green; the icon follows bb's bundled-plugin
+`icons/*.svg` convention and the catalog uses the schema's `{url}` form.

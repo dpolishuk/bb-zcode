@@ -6,6 +6,12 @@ const overview = await readFile(new URL("PLUGIN_OVERVIEW.md", root), "utf8");
 if (!overview.trim() || [...overview.trimEnd()].length > 4000) {
   throw new Error("PLUGIN_OVERVIEW.md must contain 1–4000 characters.");
 }
+// Catalog icons are either a host glyph name or { url } pointing at a plugin
+// asset; relative URLs resolve against this catalog document.
+const glyph = /^[A-Za-z][A-Za-z0-9]*$/;
+const icon = glyph.test(pkg.bb.branding.icon)
+  ? pkg.bb.branding.icon
+  : { url: pkg.bb.branding.icon };
 
 const catalog = {
   $schema: "https://getbb.app/schemas/marketplace-v2.schema.json",
@@ -19,7 +25,7 @@ const catalog = {
       id: "zcode",
       displayName: pkg.bb.name,
       description: pkg.bb.description,
-      icon: pkg.bb.branding.icon,
+      icon,
       tags: ["coding", "provider", "zcode", "local"],
       author: {
         name: "Dmitry Polishuk",

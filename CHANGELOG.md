@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2 — 2026-10-20
+
+- Add a custom provider mark: a bold angular "Z" with slash-cut terminals in
+  ZCode's monochrome style, served as an SVG mask so it follows bb's theme.
+- The marketplace catalog now carries the icon as a plugin asset URL instead
+  of the generic Terminal glyph.
+
 ## 0.9.1 — 2026-10-20
 
 - Reject native host-service ports (browser control, automations, Off-Peak

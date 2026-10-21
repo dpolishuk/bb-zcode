@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zcode",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "private": true,
   "license": "MIT",
   "author": "Dmitry Polishuk (https://github.com/dpolishuk)",
@@ -23,7 +23,7 @@
     "name": "ZCode [Experimental]",
     "description": "Run local ZCode sessions with streaming replies, tool activity, approvals, and resume.",
     "branding": {
-      "icon": "Terminal"
+      "icon": "icons/zcode.svg"
     },
     "server": "./server.ts",
     "host": "./src/host.ts",
