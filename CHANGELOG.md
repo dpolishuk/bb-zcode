@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3 — 2026-10-20
+
+- Fix the provider mark: the first Z polygon was self-touching, which fill
+  rules collapsed into hairline slivers. The mark is now composed of three
+  simple overlapping shapes (top bar, diagonal band, sheared bottom bar) and
+  renders as a bold Z at every size.
+
 ## 0.9.2 — 2026-10-20
 
 - Add a custom provider mark: a bold angular "Z" with slash-cut terminals in

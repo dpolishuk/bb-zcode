@@ -58,3 +58,7 @@
   angular Z with slash-cut terminals in ZCode's monochrome style, rendered as
   a themed currentColor mask; the marketplace catalog carries it as a plugin
   asset URL instead of the Terminal glyph.
+- **Fixed** v0.9.3 provider mark: the initial Z polygon was self-touching
+  (a vertex lay on its own edge), so fill rules rendered only hairline
+  slivers. Rebuilt as three simple overlapping shapes; verified at 512 px
+  and 64 px.
