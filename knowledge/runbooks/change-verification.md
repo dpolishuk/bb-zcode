@@ -114,3 +114,6 @@ runtime asar was inspected to confirm it does not yet send
 
 v0.9.0 (`/zcode-plugin` management commands, 2026-10-20): **155 tests in 11
 files**, full `npm run check` and the live smoke green.
+
+v0.9.1 (actionable host-service errors, 2026-10-20): **156 tests in 11
+files**, full `npm run check` and the live smoke green.

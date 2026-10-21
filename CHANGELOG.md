@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1 — 2026-10-20
+
+- Reject native host-service ports (browser control, automations, Off-Peak
+  tasks, topic resources, MCP Apps) with an actionable message pointing to
+  ZCode Desktop, instead of a generic capability error or session mismatch.
+- Verified against SDK 0.6.49 that bb's provider bridge has no host-service
+  channel (`BRIDGE_REQUEST_METHODS`); full browser bridging stays blocked on
+  bb and is documented as such in the capability audit roadmap.
+
 ## 0.9.0 — 2026-10-20
 
 - Add `/zcode-plugin` provider commands for ZCode's native plugin manager:

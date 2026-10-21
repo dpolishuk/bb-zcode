@@ -184,7 +184,8 @@ implemented but has not received the same live verification.
   from bb. Full unified-diff views, cost billing and a full subagent tree
   remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
-  further integration.
+  further integration; native attempts fail with a clear message pointing to
+  ZCode Desktop.
 - ZCode labels this session API as legacy while migrating its desktop protocol.
   Future CLI versions may require adapter changes.
 

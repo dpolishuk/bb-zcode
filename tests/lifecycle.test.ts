@@ -947,3 +947,21 @@ it("rejects malformed plugin commands without native calls", async () => {
   }
   expect(h.calls.some((c) => c.method.startsWith("plugins/"))).toBe(false);
 });
+
+it("rejects native host-service ports with actionable messages", async () => {
+  const h = harness(),
+    id = await h.start();
+  const cb = h.sessions.get(id)!.cb!;
+  await expect(
+    cb.request("interaction/browserExecute", { sessionId: id }),
+  ).rejects.toThrow(/Browser control.*ZCode Desktop/);
+  await expect(
+    cb.request("automation/list", { sessionId: id }),
+  ).rejects.toThrow(/ZCode automations.*ZCode Desktop/);
+  await expect(
+    cb.request("mcp/uiOpenInstance", { sessionId: id }),
+  ).rejects.toThrow(/ZCode MCP Apps.*ZCode Desktop/);
+  await expect(
+    cb.request("bot/channel/reply", { sessionId: id }),
+  ).rejects.toThrow(/topic resources.*ZCode Desktop/);
+});

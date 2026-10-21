@@ -78,12 +78,21 @@ configuration inside its trust boundary, with no bridge-side review. Long
 operations use a 120 s native request timeout; async operation polling
 (`plugins/operationProgress`) is not bridged yet.
 
-## Stage 5 — browser control via the bb desktop browser host
+## Stage 5 — browser control: blocked on bb, errors shipped (v0.9.1)
 
-Stop rejecting `interaction/browserList`/`browserExecute` and translate them
-to bb's browser host. The bridge→bb request channel already exists
-(`item/tool/call`); design the permission model first (pages, screenshots).
-Largest integration; needs installed-bb verification.
+Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
+
+- `BRIDGE_REQUEST_METHODS` (SDK 0.6.49) is the complete bb→bridge surface and
+  carries no browser/host RPCs, and the main SDK's browser APIs
+  (`ExperimentalDesktopBrowsersArea` etc.) serve plugin UI webview contexts,
+  not provider bridge workers. Full bridging therefore waits on an upstream
+  bb extension. What shipped in v0.9.1: `interaction/browserList|Execute`,
+  `automation/*`, `offPeak/*`, `bot/channel/reply` and `mcp/ui*` reverse RPCs
+  are rejected uniformly with an actionable message pointing to ZCode
+  Desktop. The remaining design option that does not need bb is a
+  self-hosted CDP browser provider inside the plugin - a security-sensitive
+  decision (browser launch, permissions, lifecycle) that needs explicit
+  maintainer approval before any implementation.
 
 ## Stage 6 — automations and Off-Peak mapping
 

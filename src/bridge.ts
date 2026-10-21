@@ -61,6 +61,20 @@ import {
 import { History, BackgroundWork, managementCommands } from "./lifecycle.js";
 
 type Message = Record<string, unknown>;
+
+/** Native host-service ports that bb's provider bridge cannot serve. */
+function hostServiceUnavailable(method: string): string | undefined {
+  if (
+    method === "interaction/browserList" ||
+    method === "interaction/browserExecute"
+  )
+    return "Browser control";
+  if (method.startsWith("automation/")) return "ZCode automations";
+  if (method.startsWith("offPeak/")) return "ZCode Off-Peak tasks";
+  if (method === "bot/channel/reply") return "ZCode topic resources";
+  if (method.startsWith("mcp/ui")) return "ZCode MCP Apps";
+  return undefined;
+}
 type Session = {
   threadId: string;
   providerThreadId: string;
@@ -707,6 +721,16 @@ export function createBridge(
         errorMessage: "No active bb session for ZCode account authentication.",
       };
     }
+    // These native ports need a host service bb's provider bridge does not
+    // expose (verified against SDK 0.6.49: BRIDGE_REQUEST_METHODS has no
+    // host-service channel). Reject uniformly with an actionable reason
+    // instead of a generic capability error or a session mismatch.
+    const hostService = hostServiceUnavailable(method);
+    if (hostService)
+      throw new ProtocolError(
+        `${hostService} is not available through bb's provider bridge. Use ZCode Desktop for this feature.`,
+        -32601,
+      );
     if (!session || session.stopping)
       throw new ProtocolError("No active bb session for this request.", -32601);
     const p = record(raw);

@@ -45,3 +45,7 @@
   onto `plugins/*` with explicit errors, bounded honest rendering and the
   trust boundary documented. Stage 4 marked done in the
   [feature roadmap](decisions/feature-roadmap.md); baseline 155 tests.
+- **Updated** v0.9.1: native host-service ports (browser, automation,
+  Off-Peak, topics, MCP Apps) now fail with actionable messages; stage 5 of
+  the [feature roadmap](decisions/feature-roadmap.md) recorded as blocked on
+  bb with SDK evidence (no host-service channel in the bridge protocol).
