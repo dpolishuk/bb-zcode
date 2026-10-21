@@ -111,3 +111,6 @@ v0.8.0 (bb-local archive/rename and goal clearing, 2026-10-20): **151 tests
 in 11 files**, full `npm run check` and the live smoke green. The bb 0.46.1
 runtime asar was inspected to confirm it does not yet send
 `thread/archive|unarchive|name/set|goal/clear` requests.
+
+v0.9.0 (`/zcode-plugin` management commands, 2026-10-20): **155 tests in 11
+files**, full `npm run check` and the live smoke green.

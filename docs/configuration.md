@@ -275,14 +275,15 @@ complete child-session tree.
 
 Provider commands appear in bb's command menu and `bb thread commands`:
 
-| Command                              | Behavior                                                                     |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| `/zcode-tasks`                       | List task IDs and native statuses for this session                           |
-| `/zcode-task-output <id>`            | Read up to 8 KiB of authorized native Bash output                            |
-| `/zcode-task-stop <id>`              | Request cancellation of one active, cancellable task                         |
-| `/zcode-file-preview [checkpoint]`   | Preview native file rollback for a turn; defaults to the latest stable reply |
-| `/zcode-file-rewind <preview-token>` | Apply the previewed file-only rollback in Full Access mode                   |
-| `/zcode-check [providerId/modelId]`  | Run ZCode's native model connectivity test; one real model request           |
+| Command                              | Behavior                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `/zcode-tasks`                       | List task IDs and native statuses for this session                                                            |
+| `/zcode-task-output <id>`            | Read up to 8 KiB of authorized native Bash output                                                             |
+| `/zcode-task-stop <id>`              | Request cancellation of one active, cancellable task                                                          |
+| `/zcode-file-preview [checkpoint]`   | Preview native file rollback for a turn; defaults to the latest stable reply                                  |
+| `/zcode-file-rewind <preview-token>` | Apply the previewed file-only rollback in Full Access mode                                                    |
+| `/zcode-check [providerId/modelId]`  | Run ZCode's native model connectivity test; one real model request                                            |
+| `/zcode-plugin <action> [args]`      | Manage native ZCode plugins: list, install, update, uninstall, enable, disable, marketplace add/update/remove |
 
 Management commands run when the foreground is idle and do not submit a model
 prompt; `/zcode-check` is the exception in effect - it submits no session
@@ -291,6 +292,11 @@ independently notify its model when background work completes
 or is cancelled, which can produce an additional native turn and usage.
 Agent output is available as task summaries; Bash output retrieval is scoped
 by native session/work IDs, and never reads a caller-supplied filesystem path.
+
+`/zcode-plugin` wraps ZCode's own plugin manager. Install, update and
+marketplace operations mutate ZCode's configuration and run plugins inside
+its trust boundary, exactly as if performed from ZCode itself; the bridge
+adds no additional review and reports only what ZCode returns.
 
 File rollback is separate from conversation rewind. Inspect the native preview
 before applying it outside plan mode. Its session-specific token expires after

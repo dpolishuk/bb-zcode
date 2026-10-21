@@ -67,12 +67,16 @@ action and requires the thread's active session. Native goal state is not
 mirrored into bb timeline deltas (no native goal push events); that remains
 follow-up work with the v4 snapshot surface.
 
-## Stage 4 — native plugin management commands
+## Stage 4 — native plugin management commands (done in v0.9.0)
 
-Add `/zcode-plugin list|install|update|...` provider commands mapping to the
-20 `plugins/*` methods, following the `/zcode-tasks` management-command
-pattern (idle foreground, no model prompt). Operations mutate ZCode's own
-configuration - document that trust boundary.
+`/zcode-plugin list|install|update|uninstall|enable|disable|marketplace
+add|update|remove` maps onto the native `plugins/*` methods following the
+`/zcode-tasks` pattern: idle foreground, no model prompt, explicit errors for
+malformed commands, bounded output that renders only fields native replies
+carry. The documented trust boundary: operations mutate ZCode's own plugin
+configuration inside its trust boundary, with no bridge-side review. Long
+operations use a 120 s native request timeout; async operation polling
+(`plugins/operationProgress`) is not bridged yet.
 
 ## Stage 5 — browser control via the bb desktop browser host
 

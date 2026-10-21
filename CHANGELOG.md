@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 — 2026-10-20
+
+- Add `/zcode-plugin` provider commands for ZCode's native plugin manager:
+  list, install, update, uninstall, enable, disable, and marketplace
+  add/update/remove, mapped onto the native `plugins/*` methods.
+- Render only the fields native replies actually carry (installed plugins,
+  dependency closure, diagnostics) with bounded output; malformed commands
+  fail explicitly without native calls.
+- These commands mutate ZCode's own plugin configuration inside its trust
+  boundary, exactly as if performed from ZCode itself.
+
 ## 0.8.0 — 2026-10-20
 
 - Support bb thread archive, unarchive and rename actions. Names and archive

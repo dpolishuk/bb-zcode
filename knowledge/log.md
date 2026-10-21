@@ -41,3 +41,7 @@
   and `thread/goal/clear` → native `session/goal` clear. Stage 3 marked done
   in the [feature roadmap](decisions/feature-roadmap.md) with the bb-0.46.1
   runtime finding; baseline updated to 151 tests.
+- **Updated** v0.9.0 native plugin management: `/zcode-plugin` family mapped
+  onto `plugins/*` with explicit errors, bounded honest rendering and the
+  trust boundary documented. Stage 4 marked done in the
+  [feature roadmap](decisions/feature-roadmap.md); baseline 155 tests.

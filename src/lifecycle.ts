@@ -330,6 +330,12 @@ export const managementCommands: Array<Record<string, string>> = [
       "Test native model connectivity with one real request (idle session)",
     inputHint: "[providerId/modelId]",
   },
+  {
+    name: "zcode-plugin",
+    description:
+      "Manage native ZCode plugins: list, install, update, uninstall, enable, disable, marketplace",
+    inputHint: "<action> [args]",
+  },
 ];
 export class BackgroundWork {
   private jobs = new Map<

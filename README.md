@@ -180,8 +180,9 @@ implemented but has not received the same live verification.
   connectivity test with one real model request.
 - bb archive and rename actions work, with names and archive state kept in
   bb (ZCode title generation stays off); clearing a thread goal calls the
-  native session goal action. Full unified-diff views, cost billing and a
-  full subagent tree remain unsupported.
+  native session goal action. `/zcode-plugin` manages ZCode's own plugins
+  from bb. Full unified-diff views, cost billing and a full subagent tree
+  remain unsupported.
 - Browser Use, interactive plugin UI, and workflow/scheduler host services need
   further integration.
 - ZCode labels this session API as legacy while migrating its desktop protocol.

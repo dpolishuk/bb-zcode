@@ -78,6 +78,50 @@ function harness(compatible = true) {
             return snapshot();
           }
           if (method === "session/read") return snapshot();
+          if (method === "plugins/list")
+            return {
+              plugins: [
+                {
+                  id: "official-tools",
+                  name: "Official Tools",
+                  description: "Bundled fixture tools",
+                  version: "1.2.0",
+                  enabled: true,
+                  marketplace: "zcode",
+                  source: "builtin",
+                  mcpServerNames: [],
+                  skillRootCount: 0,
+                  commandRootCount: 0,
+                  rootPath: "/fixture",
+                },
+                {
+                  id: "extra",
+                  name: "Extra",
+                  enabled: false,
+                  marketplace: "community",
+                  source: "git",
+                  mcpServerNames: [],
+                  skillRootCount: 0,
+                  commandRootCount: 0,
+                  rootPath: "/fixture",
+                },
+              ],
+              diagnostics: [],
+            };
+          if (method === "plugins/install")
+            return {
+              installedPlugins: [
+                {
+                  id: "demo",
+                  name: "Demo Plugin",
+                  marketplace: String(p.marketplace),
+                  enabled: true,
+                  scope: "user",
+                },
+              ],
+              dependencyClosure: ["demo"],
+              diagnostics: [],
+            };
           if (method === "v4/conversation/rowsRange") {
             if (!compatible) throw new ProtocolError("Unknown method", -32601);
             return {
@@ -846,4 +890,60 @@ it("rejects goal clearing without the thread's active session", async () => {
   });
   expect(r.error).toBeDefined();
   expect(h.calls.some((c) => c.method === "session/goal")).toBe(false);
+});
+
+it("lists native ZCode plugins without a model prompt", async () => {
+  const h = harness(),
+    id = await h.start();
+  const r = await h.send(id, "/zcode-plugin list");
+  expect(r.error).toBeUndefined();
+  expect(
+    h.deltas().some((d) => String(d.text).includes("Official Tools")),
+  ).toBe(true);
+  expect(h.deltas().some((d) => String(d.text).includes("[disabled]"))).toBe(
+    true,
+  );
+  expect(h.calls.some((c) => c.method === "session/send")).toBe(false);
+});
+
+it("installs native plugins with name and marketplace", async () => {
+  const h = harness(),
+    id = await h.start();
+  const r = await h.send(id, "/zcode-plugin install demo community");
+  expect(r.error).toBeUndefined();
+  expect(h.calls.find((c) => c.method === "plugins/install")).toMatchObject({
+    params: { pluginName: "demo", marketplace: "community" },
+  });
+  expect(h.deltas().some((d) => String(d.text).includes("Demo Plugin"))).toBe(
+    true,
+  );
+});
+
+it("enables and disables native plugins by id", async () => {
+  const h = harness(),
+    id = await h.start();
+  await h.send(id, "/zcode-plugin disable official-tools");
+  expect(h.calls.find((c) => c.method === "plugins/setEnabled")).toMatchObject({
+    params: { pluginId: "official-tools", enabled: false },
+  });
+  await h.send(id, "/zcode-plugin enable official-tools");
+  expect(
+    h.calls
+      .filter((c) => c.method === "plugins/setEnabled")
+      .some((c) => record(c.params).enabled === true),
+  ).toBe(true);
+});
+
+it("rejects malformed plugin commands without native calls", async () => {
+  const h = harness(),
+    id = await h.start();
+  for (const bad of [
+    "/zcode-plugin install onlyname",
+    "/zcode-plugin enable",
+    "/zcode-plugin nonsense",
+  ]) {
+    const r = await h.send(id, bad);
+    expect(r.error, bad).toBeDefined();
+  }
+  expect(h.calls.some((c) => c.method.startsWith("plugins/"))).toBe(false);
 });

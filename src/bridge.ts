@@ -139,6 +139,174 @@ async function checkConnectivity(session: Session, argument: string) {
   return `ZCode verified connectivity for ${selection.providerId}/${selection.modelId}. This ran one real model request.`;
 }
 
+const USAGE = [
+  "Usage:",
+  "/zcode-plugin list",
+  "/zcode-plugin install <name> <marketplace>",
+  "/zcode-plugin update [plugin-id]",
+  "/zcode-plugin uninstall <plugin-id>",
+  "/zcode-plugin enable <plugin-id>",
+  "/zcode-plugin disable <plugin-id>",
+  "/zcode-plugin marketplace add <source>",
+  "/zcode-plugin marketplace update [name]",
+  "/zcode-plugin marketplace remove <name>",
+].join("\n");
+
+const clip = (value: string, limit = 2000) => value.slice(0, limit);
+
+/** Renders only fields the native reply actually carries. */
+function pluginReport(raw: unknown): string {
+  const result = record(raw);
+  const lines: string[] = [];
+  const installed = Array.isArray(result.installedPlugins)
+    ? result.installedPlugins.map(record)
+    : [];
+  for (const plugin of installed.slice(0, 50))
+    lines.push(
+      clip(
+        `${text(plugin.name)} (${text(plugin.id)})${
+          text(plugin.version) ? ` @ ${text(plugin.version)}` : ""
+        }${plugin.enabled === false ? " [disabled]" : ""}`,
+      ),
+    );
+  if (installed.length > 50) lines.push(`…and ${installed.length - 50} more`);
+  if (
+    Array.isArray(result.dependencyClosure) &&
+    result.dependencyClosure.length
+  )
+    lines.push(
+      `Dependency closure: ${result.dependencyClosure.length} plugin(s).`,
+    );
+  for (const diagnostic of (Array.isArray(result.diagnostics)
+    ? result.diagnostics.map(record)
+    : []
+  ).slice(0, 20)) {
+    const message = text(diagnostic.message) || text(diagnostic.summary);
+    if (message) lines.push(clip(`Diagnostic: ${message}`));
+  }
+  if (!lines.length)
+    lines.push("ZCode accepted the operation with no further detail.");
+  return lines.join("\n");
+}
+
+/**
+ * Native ZCode plugin management. These commands mutate ZCode's own plugin
+ * configuration and run inside its trust boundary, exactly as if performed
+ * from ZCode itself; the bridge adds no additional review.
+ */
+async function managePlugins(session: Session, argument: string) {
+  const parts = argument.split(/\s+/).filter(Boolean);
+  const action = parts[0] ?? "";
+  const workspace = workspaceRef(session.cwd);
+  const timeoutMs = 120_000;
+  const call = (method: string, params: Record<string, unknown>) =>
+    session.client.request(method, { workspace, ...params }, timeoutMs);
+  switch (action) {
+    case "list": {
+      const result = record(await call("plugins/list", {}));
+      const plugins = Array.isArray(result.plugins)
+        ? result.plugins.map(record)
+        : [];
+      if (!plugins.length) return "No ZCode plugins are installed.";
+      const lines = plugins
+        .slice(0, 50)
+        .map((plugin) =>
+          clip(
+            `${text(plugin.name)} (${text(plugin.id)})${
+              text(plugin.version) ? ` @ ${text(plugin.version)}` : ""
+            }${plugin.enabled === false ? " [disabled]" : ""}` +
+              (text(plugin.description)
+                ? ` - ${text(plugin.description)}`
+                : ""),
+          ),
+        );
+      if (plugins.length > 50) lines.push(`…and ${plugins.length - 50} more`);
+      for (const diagnostic of (Array.isArray(result.diagnostics)
+        ? result.diagnostics.map(record)
+        : []
+      ).slice(0, 20)) {
+        const message = text(diagnostic.message) || text(diagnostic.summary);
+        if (message) lines.push(clip(`Diagnostic: ${message}`));
+      }
+      return lines.join("\n");
+    }
+    case "install": {
+      if (parts.length < 3)
+        throw new ProtocolError(
+          "Usage: /zcode-plugin install <name> <marketplace>",
+          -32000,
+        );
+      return pluginReport(
+        await call("plugins/install", {
+          pluginName: parts[1],
+          marketplace: parts[2],
+        }),
+      );
+    }
+    case "update":
+      return pluginReport(
+        await call("plugins/update", parts[1] ? { pluginId: parts[1] } : {}),
+      );
+    case "uninstall":
+      if (parts.length < 2)
+        throw new ProtocolError(
+          "Usage: /zcode-plugin uninstall <plugin-id>",
+          -32000,
+        );
+      return pluginReport(
+        await call("plugins/uninstall", { pluginId: parts[1] }),
+      );
+    case "enable":
+    case "disable": {
+      if (parts.length < 2)
+        throw new ProtocolError(
+          `Usage: /zcode-plugin ${action} <plugin-id>`,
+          -32000,
+        );
+      await call("plugins/setEnabled", {
+        pluginId: parts[1],
+        enabled: action === "enable",
+      });
+      return `ZCode ${action === "enable" ? "enabled" : "disabled"} ${parts[1]}.`;
+    }
+    case "marketplace":
+      switch (parts[1]) {
+        case "add":
+          if (parts.length < 3)
+            throw new ProtocolError(
+              "Usage: /zcode-plugin marketplace add <source>",
+              -32000,
+            );
+          return pluginReport(
+            await call("plugins/marketplace/add", { source: parts[2] }),
+          );
+        case "update":
+          return pluginReport(
+            await call(
+              "plugins/marketplace/update",
+              parts[2] ? { marketplace: parts[2] } : {},
+            ),
+          );
+        case "remove":
+          if (parts.length < 3)
+            throw new ProtocolError(
+              "Usage: /zcode-plugin marketplace remove <name>",
+              -32000,
+            );
+          return pluginReport(
+            await call("plugins/marketplace/remove", { marketplace: parts[2] }),
+          );
+        default:
+          throw new ProtocolError(
+            "Usage: /zcode-plugin marketplace add|update|remove …",
+            -32000,
+          );
+      }
+    default:
+      throw new ProtocolError(USAGE, -32000);
+  }
+}
+
 export function createBridge(
   config: {
     write?: (message: Message) => void;
@@ -919,7 +1087,7 @@ export function createBridge(
       const prompt = material.content;
       const command =
         !material.attachments &&
-        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check)(?:\s+(.*))?$/.exec(
+        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin)(?:\s+(.*))?$/.exec(
           prompt.trim(),
         );
       if (command) {
@@ -946,7 +1114,9 @@ export function createBridge(
               ? await session.history.rewindFiles(argument)
               : command[1] === "zcode-check"
                 ? await checkConnectivity(session, argument)
-                : await session.background.manage(command[1]!, argument);
+                : command[1] === "zcode-plugin"
+                  ? await managePlugins(session, argument)
+                  : await session.background.manage(command[1]!, argument);
         if (session.stopping)
           throw new Error("Session stopped while managing tasks.");
         if (clientRequestId) session.accepted.add(clientRequestId);
