@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.7 — 2026-10-22
+
+- Give the marketplace/store listing the ZCode app-icon look: a full-color
+  black rounded square with the white Z mark (icons/zcode-badge.svg). The new
+  asset URL also refreshes bb's catalog icon cache. The in-app provider mark
+  stays the theme-aware monochrome glyph - bb draws provider marks with
+  currentColor by design, like its bundled Claude and Codex marks.
+
 ## 0.9.6 — 2026-10-21
 
 - Add context-budget model variants to the bb selector: every model whose
