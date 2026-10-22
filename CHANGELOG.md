@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.5 — 2026-10-21
+
+- Report the bound model's advertised context window instead of the native
+  projection's pre-bind default: GLM-5.3's 1M-token window now sizes bb's
+  context meter (both the initial session state and post-turn usage), where
+  the projection keeps reporting 200K until the native runtime changes.
+- Advertise each model's context window in `model/list` descriptions (e.g.
+  "1M token context window"), since bb model entries cannot carry a numeric
+  window.
+
 ## 0.9.4 — 2026-10-20
 
 - Match the ZCode app mark exactly: both terminal cuts now lean the same way

@@ -23,6 +23,7 @@ export const snapshotSchema = z
                   ref: modelRefSchema,
                   label: z.string(),
                   description: z.string().optional(),
+                  contextWindow: z.number().optional(),
                   disabledReason: z.string().optional(),
                   reasoning: z
                     .object({
@@ -97,6 +98,36 @@ export const eventSchema = z
     payload: z.unknown().optional(),
   })
   .passthrough();
+
+/**
+ * A model's advertised context window, e.g. GLM-5.3's 1,000,000 tokens. The
+ * native session projection keeps its pre-bind default (200000) even after a
+ * model is bound, so usage reporting must read the window from model
+ * metadata instead of trusting the projection.
+ */
+export function modelContextWindow(
+  snapshot: Snapshot,
+  selection?: { providerId: string; modelId: string },
+): number | undefined {
+  const target = selection ?? snapshot.settings.model.current;
+  if (!target) return undefined;
+  const entry = snapshot.settings.model.available.find(
+    (m) =>
+      m.ref.providerId === target.providerId &&
+      m.ref.modelId === target.modelId,
+  );
+  const window = entry?.contextWindow;
+  return typeof window === "number" && Number.isFinite(window) && window > 0
+    ? window
+    : undefined;
+}
+
+export function formatContextWindow(window: number): string {
+  if (window >= 1_000_000 && window % 1_000_000 === 0)
+    return `${window / 1_000_000}M`;
+  if (window >= 1_000) return `${Math.round(window / 1_000)}K`;
+  return `${window}`;
+}
 
 export function selectedModel(model: string | undefined, reasoning?: string) {
   if (!model || model === "zcode-default") return undefined;

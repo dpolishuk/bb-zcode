@@ -41,6 +41,8 @@ import {
   DEFAULT_MODEL,
   RUNTIME_PREFERENCES,
   modelForTurn,
+  modelContextWindow,
+  formatContextWindow,
   selectedModel,
   type Snapshot,
 } from "./protocol.js";
@@ -93,6 +95,8 @@ type Session = {
   snapshot: Snapshot;
   usage: Usage;
   activeTurnId?: string;
+  /** Model bound to the in-flight turn; drives context-window reporting. */
+  turnModel?: { providerId: string; modelId: string };
   history: History;
   background: BackgroundWork;
   beforeRowId: number;
@@ -486,6 +490,7 @@ export function createBridge(
   ) {
     cancelTools(session);
     session.injectedNativeCalls.clear();
+    session.turnModel = undefined;
     const timeline = session.timeline;
     session.timeline = undefined;
     session.activeTurnId = undefined;
@@ -507,14 +512,13 @@ export function createBridge(
     if (!session.timeline || session.draining) return;
     session.draining = true;
     try {
-      const window = record(session.snapshot.projection).contextWindow;
-      emit(
-        session,
-        session.usage.turn(
-          payload.usage,
-          typeof window === "number" ? window : null,
-        ),
-      );
+      // The projection keeps its pre-bind default window; prefer the bound
+      // model's advertised context window (e.g. GLM-5.3's 1M tokens).
+      const projected = record(session.snapshot.projection).contextWindow;
+      const window =
+        modelContextWindow(session.snapshot, session.turnModel) ??
+        (typeof projected === "number" ? projected : null);
+      emit(session, session.usage.turn(payload.usage, window));
       try {
         const snapshot = snapshotSchema.parse(
           await session.client.request(
@@ -526,7 +530,13 @@ export function createBridge(
         if (!session.stopping) {
           session.snapshot = snapshot;
           session.background.update(snapshot.projection);
-          emit(session, session.usage.context(snapshot.projection));
+          emit(
+            session,
+            session.usage.context(
+              snapshot.projection,
+              modelContextWindow(snapshot, session.turnModel),
+            ),
+          );
         }
       } catch {
         /* Usage queries must never prevent a turn from settling. */
@@ -1073,6 +1083,15 @@ export function createBridge(
         },
       ]);
       session.background.update(snapshot.projection);
+      // Size the context meter from model metadata before the first turn:
+      // the native projection still carries its pre-bind default window.
+      emit(
+        session,
+        session.usage.context(
+          snapshot.projection,
+          modelContextWindow(snapshot),
+        ),
+      );
       return session;
     } catch (failure) {
       await toolServer?.close();
@@ -1182,6 +1201,12 @@ export function createBridge(
         options.model,
         options.reasoningLevel,
       );
+      session.turnModel = modelSelection
+        ? {
+            providerId: modelSelection.providerId,
+            modelId: modelSelection.modelId,
+          }
+        : undefined;
       if (
         session.accountError &&
         modelSelection?.providerId.startsWith("account:")
@@ -1444,12 +1469,20 @@ export function createBridge(
             models: available.length
               ? available.map((model) => {
                   const key = `${model.ref.providerId}/${model.ref.modelId}`;
+                  // bb's model entries cannot carry a numeric context
+                  // window; advertise GLM-5.3's 1M tokens in the description.
+                  const context = model.contextWindow
+                    ? `${formatContextWindow(model.contextWindow)} token context window`
+                    : undefined;
+                  const description = model.description
+                    ? [model.description, context].filter(Boolean).join(". ")
+                    : (context ?? "");
                   return {
                     id: key,
                     model: key,
                     displayName: model.label,
                     isDefault: key === defaultId,
-                    description: model.description ?? "",
+                    description,
                     supportedReasoningEfforts: (
                       model.reasoning?.levels ?? []
                     ).map((level) => ({

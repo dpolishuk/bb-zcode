@@ -469,6 +469,47 @@ it("reports native usage and context without adding reasoning tokens twice", asy
   });
 });
 
+it("sizes the context meter from model metadata even when the projection keeps its smaller default", async () => {
+  const h = harness();
+  // GLM-5.3 advertises a 1M window while the native projection stays at
+  // its pre-bind 200K default.
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  await h.start();
+  expect(h.deltas().find((d) => d.kind === "contextWindow")).toMatchObject({
+    used: 1234,
+    size: 1000000,
+  });
+  await h.send("hello");
+  h.event("turn.completed", {
+    resultType: "success",
+    usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+  });
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "contextWindow").length >= 2,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1),
+  ).toMatchObject({ used: 1234, size: 1000000 });
+  expect(h.deltas().find((d) => d.kind === "usage")).toMatchObject({
+    modelContextWindow: 1000000,
+  });
+});
+
+it("advertises each model's context window in model/list descriptions", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  const reply = await h.rpc("model/list", { cwd: h.cwd });
+  expect(reply.error).toBeUndefined();
+  const models = record(reply.result).models;
+  expect(Array.isArray(models)).toBe(true);
+  expect(
+    (models as Record<string, unknown>[]).map((m) => m.description),
+  ).toEqual(["1M token context window"]);
+});
+
 it("does not deliver duplicate client request IDs again after dequeuing", async () => {
   const h = harness();
   await h.start();
