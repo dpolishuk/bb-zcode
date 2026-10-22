@@ -507,7 +507,63 @@ it("advertises each model's context window in model/list descriptions", async ()
   expect(Array.isArray(models)).toBe(true);
   expect(
     (models as Record<string, unknown>[]).map((m) => m.description),
-  ).toEqual(["1M token context window"]);
+  ).toEqual([
+    "1M token context window",
+    "256K token context budget: caps the window reported to bb, while the model keeps its 1M native window.",
+  ]);
+});
+
+it("lists a context-budget variant next to each model with a larger native window", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  const reply = await h.rpc("model/list", { cwd: h.cwd });
+  const models = record(reply.result).models as Record<string, unknown>[];
+  expect(models.map((m) => m.displayName)).toEqual([
+    "Model (1M)",
+    "Model (256K)",
+  ]);
+  expect(models[0]).toMatchObject({ id: "test/model", isDefault: true });
+  expect(models[1]).toMatchObject({
+    id: "test/model-256k",
+    isDefault: false,
+  });
+});
+
+it("runs budget variants on the base native model and caps context reporting", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  await h.start({ options: { ...options, model: "test/model-256k" } });
+  expect(h.deltas().find((d) => d.kind === "contextWindow")).toMatchObject({
+    used: 1234,
+    size: 256000,
+  });
+  const turnReply = await h.rpc("turn/start", {
+    ...h.base,
+    options: { ...options, model: "test/model-256k" },
+    input: h.input("hello"),
+    clientRequestId: "creq_abcdefghik",
+  });
+  expect(turnReply.error).toBeUndefined();
+  await h.until(() => h.calls.some((c) => c.method === "session/send"));
+  expect(
+    h.calls.find((c) => c.method === "session/send")?.params.modelSelection,
+  ).toEqual({ providerId: "test", modelId: "model" });
+  h.event("turn.completed", {
+    resultType: "success",
+    usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+  });
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "contextWindow").length >= 2,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1),
+  ).toMatchObject({ used: 1234, size: 256000 });
+  expect(h.deltas().find((d) => d.kind === "usage")).toMatchObject({
+    modelContextWindow: 256000,
+  });
 });
 
 it("does not deliver duplicate client request IDs again after dequeuing", async () => {

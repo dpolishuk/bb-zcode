@@ -43,6 +43,8 @@ import {
   modelForTurn,
   modelContextWindow,
   formatContextWindow,
+  baseModelId,
+  CONTEXT_BUDGET_VARIANTS,
   selectedModel,
   type Snapshot,
 } from "./protocol.js";
@@ -149,12 +151,17 @@ async function checkConnectivity(session: Session, argument: string) {
       "No ZCode model is selected. Pick a model, then run /zcode-check.",
       -32000,
     );
+  // Budget variants have no native registry entry; test their base model.
+  const native = {
+    ...selection,
+    modelId: baseModelId(selection.modelId),
+  };
   await session.client.request(
     "provider/testModelConnectivity",
-    { workspace: workspaceRef(session.cwd), selection },
+    { workspace: workspaceRef(session.cwd), selection: native },
     60_000,
   );
-  return `ZCode verified connectivity for ${selection.providerId}/${selection.modelId}. This ran one real model request.`;
+  return `ZCode verified connectivity for ${native.providerId}/${native.modelId}. This ran one real model request.`;
 }
 
 const USAGE = [
@@ -1085,11 +1092,16 @@ export function createBridge(
       session.background.update(snapshot.projection);
       // Size the context meter from model metadata before the first turn:
       // the native projection still carries its pre-bind default window.
+      // bb's selected model (budget variants included) wins over the native
+      // current model when reporting the window.
       emit(
         session,
         session.usage.context(
           snapshot.projection,
-          modelContextWindow(snapshot),
+          modelContextWindow(
+            snapshot,
+            selectedModel(text(record(params.options).model)),
+          ),
         ),
       );
       return session;
@@ -1201,10 +1213,14 @@ export function createBridge(
         options.model,
         options.reasoningLevel,
       );
-      session.turnModel = modelSelection
+      // Keep bb's raw selection (budget variants included): it drives context
+      // reporting, while modelSelection above carries only native model ids.
+      const rawSelection =
+        selectedModel(options.model) ?? session.snapshot.settings.model.current;
+      session.turnModel = rawSelection
         ? {
-            providerId: modelSelection.providerId,
-            modelId: modelSelection.modelId,
+            providerId: rawSelection.providerId,
+            modelId: rawSelection.modelId,
           }
         : undefined;
       if (
@@ -1467,34 +1483,58 @@ export function createBridge(
               : undefined;
           result(id, {
             models: available.length
-              ? available.map((model) => {
+              ? available.flatMap((model) => {
                   const key = `${model.ref.providerId}/${model.ref.modelId}`;
                   // bb's model entries cannot carry a numeric context
                   // window; advertise GLM-5.3's 1M tokens in the description.
-                  const context = model.contextWindow
-                    ? `${formatContextWindow(model.contextWindow)} token context window`
+                  const window = model.contextWindow;
+                  const budget = window
+                    ? `${formatContextWindow(window)} token context window`
                     : undefined;
                   const description = model.description
-                    ? [model.description, context].filter(Boolean).join(". ")
-                    : (context ?? "");
-                  return {
-                    id: key,
-                    model: key,
-                    displayName: model.label,
-                    isDefault: key === defaultId,
-                    description,
-                    supportedReasoningEfforts: (
-                      model.reasoning?.levels ?? []
-                    ).map((level) => ({
+                    ? [model.description, budget].filter(Boolean).join(". ")
+                    : (budget ?? "");
+                  const efforts = (model.reasoning?.levels ?? []).map(
+                    (level) => ({
                       reasoningEffort: level.value,
                       label: level.label,
                       description: level.description ?? "",
-                    })),
-                    defaultReasoningEffort:
-                      model.reasoning?.defaultLevel ??
-                      model.reasoning?.levels[0]?.value ??
-                      "none",
-                  };
+                    }),
+                  );
+                  const defaultEffort =
+                    model.reasoning?.defaultLevel ??
+                    model.reasoning?.levels[0]?.value ??
+                    "none";
+                  // Models with a larger native window also get plugin-side
+                  // budget variants (e.g. GLM-5.3 (256K)) that run the base
+                  // model but cap the window reported to bb. The native
+                  // registry has no separate ids for smaller windows.
+                  const variants = CONTEXT_BUDGET_VARIANTS.filter(
+                    (variant) => (window ?? 0) > variant.window,
+                  ).map((variant) => ({
+                    id: `${key}${variant.suffix}`,
+                    model: `${key}${variant.suffix}`,
+                    displayName: `${model.label} (${formatContextWindow(variant.window)})`,
+                    isDefault: false,
+                    description: `${formatContextWindow(variant.window)} token context budget: caps the window reported to bb, while the model keeps its ${formatContextWindow(window!)} native window.`,
+                    supportedReasoningEfforts: efforts,
+                    defaultReasoningEffort: defaultEffort,
+                  }));
+                  const split = variants.length > 0 && window !== undefined;
+                  return [
+                    {
+                      id: key,
+                      model: key,
+                      displayName: split
+                        ? `${model.label} (${formatContextWindow(window!)})`
+                        : model.label,
+                      isDefault: key === defaultId,
+                      description,
+                      supportedReasoningEfforts: efforts,
+                      defaultReasoningEffort: defaultEffort,
+                    },
+                    ...variants,
+                  ];
                 })
               : [DEFAULT_MODEL],
             selectedOnlyModels: [],

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.6 — 2026-10-21
+
+- Add context-budget model variants to the bb selector: every model whose
+  advertised window exceeds a budget (currently 256K) also lists a
+  `GLM-5.3 (256K)`-style entry alongside `GLM-5.3 (1M)`. The variant runs the
+  base native model — the registry has no separate ids for smaller windows —
+  but caps the window reported to bb, sizing the context meter and compaction
+  budget to the chosen variant. Variant ids carry a `-256k` suffix that is
+  mapped back to the base model on every native call (`session/send`,
+  `provider/testModelConnectivity`).
+
 ## 0.9.5 — 2026-10-21
 
 - Report the bound model's advertised context window instead of the native

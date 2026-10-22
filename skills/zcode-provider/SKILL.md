@@ -28,6 +28,10 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
   1M tokens; the native projection keeps a smaller pre-bind default), and
   `model/list` descriptions carry the window because bb model entries have
   no numeric field for it.
+- Models with a larger native window also list context-budget variants, e.g.
+  `GLM-5.3 (256K)` next to `GLM-5.3 (1M)`. A variant runs the same base
+  native model but caps the window reported to bb; its `-256k` id suffix is
+  mapped to the base model id on every native call.
 - Enable `bbToolsEnabled` for bb-injected tools. It is off by default to preserve
   CLI MCP inheritance; when enabled, list other custom servers in `mcpServers`.
   These tools run through a session-scoped local MCP endpoint and bb’s tool

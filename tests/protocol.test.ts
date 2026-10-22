@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
 import { experimental_scanPublicSdkOnly } from "@get-bb/plugin-sdk/testing";
-import { modelForTurn, selectedModel, type Snapshot } from "../src/protocol.js";
+import {
+  baseModelId,
+  modelContextWindow,
+  modelForTurn,
+  selectedModel,
+  type Snapshot,
+} from "../src/protocol.js";
 import { resolveLaunch } from "../src/launch.js";
 
 const snapshot: Snapshot = {
@@ -61,6 +67,55 @@ it("preserves saved native model options when changing reasoning", () => {
     maxOutputTokens: 8000,
     reasoningLevel: "high",
   });
+});
+
+it("runs context-budget variants on the base model with the variant's reasoning", () => {
+  const wide: Snapshot = {
+    ...snapshot,
+    settings: {
+      model: {
+        current: { providerId: "api", modelId: "model" },
+        available: [
+          {
+            ref: { providerId: "api", modelId: "model" },
+            label: "Model",
+            contextWindow: 1000000,
+            reasoning: snapshot.settings.model.available[0].reasoning,
+          },
+        ],
+      },
+    },
+  };
+  expect(modelForTurn(wide, "api/model-256k", "high")).toEqual({
+    providerId: "api",
+    modelId: "model",
+    options: { reasoningLevel: "high" },
+  });
+  expect(
+    modelContextWindow(wide, { providerId: "api", modelId: "model-256k" }),
+  ).toBe(256000);
+  expect(modelContextWindow(wide)).toBe(1000000);
+  // A budget can only shrink the advertised window, never enlarge it.
+  const narrow: Snapshot = {
+    ...wide,
+    settings: {
+      model: {
+        current: { providerId: "api", modelId: "model" },
+        available: [
+          {
+            ref: { providerId: "api", modelId: "model" },
+            label: "Model",
+            contextWindow: 200000,
+          },
+        ],
+      },
+    },
+  };
+  expect(
+    modelContextWindow(narrow, { providerId: "api", modelId: "model-256k" }),
+  ).toBe(200000);
+  expect(baseModelId("GLM-5.3-256k")).toBe("GLM-5.3");
+  expect(baseModelId("GLM-5.3")).toBe("GLM-5.3");
 });
 it("passes executable arguments as an argv array without a shell", () => {
   const launch = resolveLaunch(

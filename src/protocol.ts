@@ -59,17 +59,19 @@ export function modelForTurn(
 ) {
   const selection = selectedModel(model) ?? snapshot.settings.model.current;
   if (!selection) return undefined;
+  // Budget variants run the base native model; the suffix never reaches ZCode.
+  const nativeModelId = baseModelId(selection.modelId);
   const entry = snapshot.settings.model.available.find(
     (m) =>
       m.ref.providerId === selection.providerId &&
-      m.ref.modelId === selection.modelId,
+      m.ref.modelId === nativeModelId,
   );
   const levels = entry?.reasoning?.levels ?? [];
   const current = snapshot.settings.model.current;
   const options = {
     ...record(record(entry?.ref).options),
     ...(current?.providerId === selection.providerId &&
-    current?.modelId === selection.modelId
+    current?.modelId === nativeModelId
       ? record(record(current).options)
       : {}),
     ...record(record(selection).options),
@@ -82,7 +84,7 @@ export function modelForTurn(
       : (entry?.reasoning?.defaultLevel ?? levels[0]?.value);
   return {
     providerId: selection.providerId,
-    modelId: selection.modelId,
+    modelId: nativeModelId,
     ...(Object.keys(options).length || level
       ? { options: { ...options, ...(level ? { reasoningLevel: level } : {}) } }
       : {}),
@@ -111,15 +113,22 @@ export function modelContextWindow(
 ): number | undefined {
   const target = selection ?? snapshot.settings.model.current;
   if (!target) return undefined;
+  const variant = contextBudgetVariant(target.modelId);
   const entry = snapshot.settings.model.available.find(
     (m) =>
       m.ref.providerId === target.providerId &&
-      m.ref.modelId === target.modelId,
+      m.ref.modelId ===
+        (variant ? baseModelId(target.modelId) : target.modelId),
   );
   const window = entry?.contextWindow;
-  return typeof window === "number" && Number.isFinite(window) && window > 0
-    ? window
-    : undefined;
+  const valid =
+    typeof window === "number" && Number.isFinite(window) && window > 0
+      ? window
+      : undefined;
+  // A budget variant can only shrink the window it reports to bb.
+  if (variant && valid) return Math.min(variant.window, valid);
+  if (variant) return undefined;
+  return valid;
 }
 
 export function formatContextWindow(window: number): string {
@@ -127,6 +136,29 @@ export function formatContextWindow(window: number): string {
     return `${window / 1_000_000}M`;
   if (window >= 1_000) return `${Math.round(window / 1_000)}K`;
   return `${window}`;
+}
+
+/**
+ * Plugin-side context-budget variants: bb selector entries that run the base
+ * native model but cap the window reported to bb. The native registry has no
+ * separate model ids for smaller windows (it rejects `GLM-5.3-256K`), so the
+ * variant exists only in the id suffix and in context reporting.
+ */
+export const CONTEXT_BUDGET_VARIANTS = [
+  { suffix: "-256k", window: 256_000 },
+] as const;
+
+export function contextBudgetVariant(
+  modelId: string,
+): (typeof CONTEXT_BUDGET_VARIANTS)[number] | undefined {
+  return CONTEXT_BUDGET_VARIANTS.find((variant) =>
+    modelId.endsWith(variant.suffix),
+  );
+}
+
+export function baseModelId(modelId: string): string {
+  const variant = contextBudgetVariant(modelId);
+  return variant ? modelId.slice(0, -variant.suffix.length) : modelId;
 }
 
 export function selectedModel(model: string | undefined, reasoning?: string) {
