@@ -2,6 +2,15 @@
 
 ## 2026-10-22
 
+- **Added** Icon provenance in v0.9.8: `icons/README.md` records that both
+  marks reproduce the official Z.ai logo
+  (<https://z-cdn.chatglm.cn/z-ai/static/logo.svg>, path data verbatim) and
+  why the badge filename must change with artwork: bb caches catalog icons
+  by asset URL, so only a new URL refreshes the store listing. The v0.9.2
+  hand-drawn Z and its v0.9.3/v0.9.4 geometry fixes are superseded; the
+  provider mark keeps the currentColor convention (bb inlines provider
+  marks, so `<img>`-style currentColor loss does not apply).
+
 - **Updated** [Protocol contracts](contracts/protocol-contracts.md): context
   budgets use a deterministic provider-scoped alias table that reserves native
   model identities; suffixes alone never authorize rewriting a model ID.

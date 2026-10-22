@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.8 — 2026-10-22
+
+- Use the official Z.ai brand mark in both icons. The store badge is now
+  `icons/zai-badge.svg`, a cleaned vector reproduction of Z.ai's own logo
+  (the dark rounded square with the white three-stroke Z, path data taken
+  from the official favicon asset); the theme-aware provider mark
+  (`icons/zcode.svg`) uses the same official Z geometry as a currentColor
+  glyph. This replaces the previous hand-drawn Z introduced in v0.9.2 and
+  restyled in v0.9.4/v0.9.7. The badge also moves to a new asset URL so
+  bb's catalog icon cache refreshes; `icons/zcode-badge.svg` is removed.
+  Z.ai and ZCode are trademarks of Z.ai / Zhipu AI, used nominatively to
+  identify the integrated product; see `icons/README.md`.
+
 ## 0.9.7 — 2026-10-22
 
 - Give the marketplace/store listing the ZCode app-icon look: a full-color

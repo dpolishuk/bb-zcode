@@ -10,7 +10,7 @@
       "displayName": "ZCode [Experimental]",
       "description": "Run local ZCode sessions with streaming replies, tool activity, approvals, and resume.",
       "icon": {
-        "url": "icons/zcode-badge.svg"
+        "url": "icons/zai-badge.svg"
       },
       "tags": [
         "coding",
