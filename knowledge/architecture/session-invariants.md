@@ -1,8 +1,9 @@
 ---
 type: invariant
 title: Session invariants
-description: Behaviors every change must preserve - explicit failure over silent substitution, credential containment, and the hard numeric bounds enforced in code.
+description: Behaviors every change must preserve - explicit failure, context-selection lifetime, credential containment, and hard numeric bounds.
 status: stable
+stale_after: 2027-01-20T00:00:00Z
 tags: [invariants, security, reliability]
 sources:
   - title: src/bridge.ts at 3dc639d
@@ -15,12 +16,20 @@ sources:
     resource: https://github.com/dpolishuk/bb-zcode/blob/3dc639de8e7926b2460059dcf20156950fc7f2d3/src/coding-plan.ts
   - title: src/tool-server.ts at 3dc639d
     resource: https://github.com/dpolishuk/bb-zcode/blob/3dc639de8e7926b2460059dcf20156950fc7f2d3/src/tool-server.ts
+  - title: Current accepted model selection and turn settlement
+    resource: ../../src/bridge.ts
+  - title: Native follow-up, resume, rejection, and model-switch regressions
+    resource: ../../tests/core-features.test.ts
+  - title: Real CLI fixture for reporting budgets and background work
+    resource: ../../scripts/smoke-live.ts
 generated:
   by: zcode-agent/GLM-5.3
   at: 2026-10-20T11:15:00Z
 verified:
   - by: zcode-agent/GLM-5.3
     at: 2026-10-20T11:15:00Z
+  - by: Codex
+    at: 2026-10-22T11:22:00Z
 ---
 
 # Session invariants
@@ -48,6 +57,27 @@ matching tests and documentation updates (see
   invented, native Bash file edits are reported as ignored rather than claimed
   restorable, and the fallback "ZCode models unavailable" entry does not claim
   authentication.
+
+## Context selection lifetime
+
+- The reporting model selection is session state. Creation and resume restore
+  it from bb's model option (or the native current model for `zcode-default`).
+- A native accepted prompt replaces that selection before buffered events are
+  replayed. Rejected or failed submissions leave the previous selection intact.
+- Foreground settlement does not clear it: ZCode can start an automatic turn
+  after background work finishes without a bb `turn/start`. Both usage and
+  refreshed context deltas must still honor the last accepted reporting budget.
+- A `session/read` refresh updates native current selection and projection but
+  retains discovered windows for known model identities. CLI 0.17.0 rewrites
+  those windows to its 200K default; that must not overwrite 1M discovery
+  metadata or remove a selected 256K reporting budget.
+- A new accepted base-model selection removes the previous cap. Budget-to-native
+  identity rules are in [Protocol contracts](../contracts/protocol-contracts.md#translation-rules).
+
+Re-verified on 2026-10-22 with focused regressions and the real CLI 0.17.0
+loopback fixture (native background completion and cold resume). Other pinned
+bounds retain the verification dates stated below; see
+[validation](../../docs/validation.md) for the evidence boundary.
 
 ## Credential containment
 

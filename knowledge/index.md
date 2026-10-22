@@ -12,11 +12,11 @@ not replace the user-facing [README](../README.md) or [docs/](../docs/).
 ## Architecture
 
 - [System overview](architecture/system-overview.md) - Entry points, the per-thread supervised ZCode process, and the responsibility of each `src/` module.
-- [Session invariants](architecture/session-invariants.md) - Behaviors every change must preserve: explicit failure, credential containment, and hard numeric bounds.
+- [Session invariants](architecture/session-invariants.md) - Behaviors every change must preserve: explicit failure, context-selection lifetime, credential containment, and hard numeric bounds.
 
 ## Contracts
 
-- [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions and translation rules.
+- [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions, native model identities and context-budget translation rules.
 
 ## Decisions
 

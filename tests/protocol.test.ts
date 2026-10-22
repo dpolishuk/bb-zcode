@@ -114,9 +114,67 @@ it("runs context-budget variants on the base model with the variant's reasoning"
   expect(
     modelContextWindow(narrow, { providerId: "api", modelId: "model-256k" }),
   ).toBe(200000);
-  expect(baseModelId("GLM-5.3-256k")).toBe("GLM-5.3");
-  expect(baseModelId("GLM-5.3")).toBe("GLM-5.3");
+  expect(baseModelId(wide, { providerId: "api", modelId: "model-256k" })).toBe(
+    "model",
+  );
+  expect(baseModelId(wide, { providerId: "api", modelId: "model" })).toBe(
+    "model",
+  );
 });
+it.each(["model-256k", "org/model-256k", "model-bb-context-256k"])(
+  "preserves the canonical native model ID %s",
+  (modelId) => {
+    const native: Snapshot = {
+      session: { sessionId: "native" },
+      settings: {
+        model: {
+          current: { providerId: "api", modelId },
+          available: [
+            {
+              ref: { providerId: "api", modelId },
+              label: "Native model",
+              contextWindow: 262144,
+            },
+          ],
+        },
+      },
+    };
+    expect(modelForTurn(native, `api/${modelId}`)?.modelId).toBe(modelId);
+    expect(modelForTurn(native, "zcode-default")?.modelId).toBe(modelId);
+    expect(modelContextWindow(native)).toBe(262144);
+  },
+);
+
+it("resolves budget aliases within the selected provider", () => {
+  const catalog: Snapshot = {
+    session: { sessionId: "native" },
+    settings: {
+      model: {
+        available: [
+          {
+            ref: { providerId: "one", modelId: "model" },
+            label: "Wide",
+            contextWindow: 1000000,
+          },
+          {
+            ref: { providerId: "two", modelId: "model-256k" },
+            label: "Native",
+            contextWindow: 262144,
+          },
+        ],
+      },
+    },
+  };
+  expect(modelForTurn(catalog, "one/model-256k")?.modelId).toBe("model");
+  expect(modelForTurn(catalog, "two/model-256k")?.modelId).toBe("model-256k");
+});
+
+it("preserves unknown suffix-shaped IDs rather than guessing their base", () => {
+  expect(modelForTurn(snapshot, "api/unknown-256k")?.modelId).toBe(
+    "unknown-256k",
+  );
+});
+
 it("passes executable arguments as an argv array without a shell", () => {
   const launch = resolveLaunch(
     {

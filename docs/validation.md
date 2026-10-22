@@ -1,8 +1,39 @@
 # Validation record
 
-Verified locally on 2026-10-17 through 2026-10-20, macOS. The checks below cover the source
+Verified locally on 2026-10-17 through 2026-10-22, macOS. The checks below cover the source
 checkout, an isolated real-CLI smoke, and installation from the published
 marketplace. Model connectivity remains a separate verification boundary.
+
+## PR #1: context windows and budget variants (2026-10-22)
+
+The PR candidate passed `npm run check`: **175 automated tests across 11
+files**, marketplace consistency, TypeScript checking and the plugin build.
+Regression cases cover native suffixed IDs, provider-scoped aliases and
+repeated alias collisions, connectivity dispatch, native background turns,
+resume before a prompt, failed submissions, accepted model changes and native
+projection refreshes. Tests reproduced the failures before their fixes.
+
+The installed ZCode CLI 0.17.0 (desktop 3.16.2), Node 26.5.0 and bb builder
+0.46.1 were used for a fresh `npm run test:live`. The isolated fixture reported
+`RUNTIME_VERIFIED`, **27 synthetic model requests** and one automatic native
+background follow-up. Both usage and the context meter kept the selected
+256,000-token reporting budget through cold resume and background completion.
+
+A new disposable bb 0.46.1 server/daemon installed the candidate from the PR
+worktree path and executed its immutable built artifact. The full fixture also
+passed: `bbThreadVerified`, `installedForkContextVerified` and
+`installedRewindContextVerified` were true, with **43 synthetic model
+requests**. The installed bb context meter received the native 1M window;
+fork/rewind, tools, skills, subagents and background-task controls also passed.
+This is candidate-installation proof, separate from a published marketplace
+Git-cache installation.
+
+This fixture also established that `session/create` advertises a 1M window
+while `session/read` returns 200K for the same model identity. Projection
+refreshes now preserve the discovered window; base and budget selections have
+regressions for this behavior. A new or resumed session refreshes discovery.
+These are reporting caps; native inference and compaction retain their own
+window. Paid production inference and Linux/Windows remain **UNVERIFIED**.
 
 ## Versions and contracts
 

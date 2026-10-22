@@ -6,10 +6,19 @@
   advertised window exceeds a budget (currently 256K) also lists a
   `GLM-5.3 (256K)`-style entry alongside `GLM-5.3 (1M)`. The variant runs the
   base native model — the registry has no separate ids for smaller windows —
-  but caps the window reported to bb, sizing the context meter and compaction
-  budget to the chosen variant. Variant ids carry a `-256k` suffix that is
-  mapped back to the base model on every native call (`session/send`,
-  `provider/testModelConnectivity`).
+  but caps bb's context meter and usage window to the chosen variant. Only
+  catalog-generated aliases map back to the base model on native calls
+  (`session/send`, `provider/testModelConnectivity`); native compaction keeps
+  the model's own window.
+- Preserve real native model IDs ending in `-256k`. Budget aliases use a
+  provider-scoped, collision-free ID when the usual suffix is already taken,
+  so both the native model and its neighbor's budget remain selectable.
+- Retain the selected reporting budget across native background follow-ups
+  and cold resume. Rejected prompts do not change it; accepting a new model
+  selection replaces it.
+- Keep discovered model windows when ZCode 0.17.0's `session/read` replaces
+  them with its 200K projection default. New and resumed sessions refresh the
+  catalog; projection refreshes preserve each known model's discovered window.
 
 ## 0.9.5 — 2026-10-21
 

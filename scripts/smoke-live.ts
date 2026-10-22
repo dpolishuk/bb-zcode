@@ -304,7 +304,7 @@ writeFileSync(
               enabled: true,
               properties: {
                 requiresMfjsToolSchema: false,
-                contextWindow: 200000,
+                contextWindow: 1000000,
                 inputFormat: {
                   supportsText: true,
                   supportsImage: true,
@@ -527,7 +527,7 @@ try {
     permissionScope: "full",
     approvalReviewer: null,
     permissionEscalation: null,
-    model: "bb-smoke/fixture",
+    model: "bb-smoke/fixture-256k",
     reasoningLevel: "high",
     providerOptions: {
       bbToolsEnabled: true,
@@ -576,6 +576,12 @@ try {
     const discovered = (catalog.models as Array<Record<string, unknown>>).find(
       (entry) => entry.model === "bb-smoke/fixture",
     );
+    if (
+      !(catalog.models as Array<Record<string, unknown>>).some(
+        (entry) => entry.model === options.model,
+      )
+    )
+      throw new Error("Bridge did not advertise the 256K context budget.");
     if (
       JSON.stringify(discovered?.supportedReasoningEfforts) !==
       JSON.stringify(
@@ -631,12 +637,21 @@ try {
       throw new Error("Bridge did not forward streamed text.");
     if (receivedEfforts.at(-1) !== "high")
       throw new Error("Selected high effort did not reach the model API.");
-    if (
-      !deltas().some((d) => d.kind === "usage") ||
-      !deltas().some((d) => d.kind === "contextWindow")
-    )
+    const budgetReported = (items: Array<Record<string, unknown>>) =>
+      items.filter((d) => d.kind === "usage").at(-1)?.modelContextWindow ===
+        256000 &&
+      items.filter((d) => d.kind === "contextWindow").at(-1)?.size === 256000;
+    if (!budgetReported(deltas()))
       throw new Error(
-        "Native token usage or context was not projected into bb.",
+        `The selected 256K budget was not projected into usage and context: ${JSON.stringify(
+          deltas()
+            .filter((d) => d.kind === "usage" || d.kind === "contextWindow")
+            .map((d) => ({
+              kind: d.kind,
+              modelContextWindow: d.modelContextWindow,
+              size: d.size,
+            })),
+        )}`,
       );
     const image = join(cwd, "fixture.png"),
       note = join(cwd, "fixture.txt");
@@ -797,6 +812,12 @@ try {
     });
     if (resumedBridge.providerThreadId !== start.providerThreadId)
       throw new Error("Bridge resume changed identity.");
+    if (
+      deltas()
+        .filter((d) => d.kind === "contextWindow")
+        .at(-1)?.size !== 256000
+    )
+      throw new Error("Cold resume lost the selected 256K context budget.");
     await rpc("turn/start", {
       threadId: "live-smoke",
       providerThreadId: start.providerThreadId,
@@ -974,6 +995,9 @@ try {
       "zcode-work-".length,
     );
     const beforeControls = modelRequests;
+    const usageBeforeControls = parentDeltas().filter(
+      (d) => d.kind === "usage",
+    ).length;
     for (const [index, prompt] of [
       `/zcode-tasks`,
       `/zcode-task-output ${workId}`,
@@ -1003,8 +1027,13 @@ try {
           d.status === "interrupted",
       ),
     );
+    // Management commands do not send prompts; require the native-origin turn.
+    await waitFor(
+      () =>
+        parentDeltas().filter((d) => d.kind === "usage").length >
+        usageBeforeControls,
+    );
     automaticBackgroundModelRequests = modelRequests - beforeControls;
-    // ZCode may automatically notify the model when background work settles.
     await waitFor(
       () =>
         !parentDeltas().some(
@@ -1013,6 +1042,10 @@ try {
             !all.slice(i + 1).some((next) => next.kind === "turn.boundary"),
         ),
     );
+    if (!budgetReported(parentDeltas()))
+      throw new Error(
+        "Native background follow-up lost the 256K context budget.",
+      );
     if (
       !parentDeltas().some(
         (d) =>
@@ -1280,7 +1313,7 @@ try {
       "--json",
     );
     const context = await cli("thread", "context", threadId, "--json");
-    if (!JSON.stringify(context).includes("200000"))
+    if (!JSON.stringify(context).includes("1000000"))
       throw new Error(
         "Installed bb context meter did not receive the native model window.",
       );
@@ -1504,6 +1537,7 @@ try {
           "native default reasoning",
           "native effort catalog",
           "selected high effort reaches model API",
+          "256K reporting budget through cold resume and native background follow-up",
           "bb streamed deltas",
           "empty-session durability",
           "stable checkpoints, native fork continuation and cold checkpoint fork",

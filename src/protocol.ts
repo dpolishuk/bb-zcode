@@ -59,8 +59,8 @@ export function modelForTurn(
 ) {
   const selection = selectedModel(model) ?? snapshot.settings.model.current;
   if (!selection) return undefined;
-  // Budget variants run the base native model; the suffix never reaches ZCode.
-  const nativeModelId = baseModelId(selection.modelId);
+  // Only catalog budget aliases resolve to a base native model.
+  const nativeModelId = baseModelId(snapshot, selection);
   const entry = snapshot.settings.model.available.find(
     (m) =>
       m.ref.providerId === selection.providerId &&
@@ -113,12 +113,11 @@ export function modelContextWindow(
 ): number | undefined {
   const target = selection ?? snapshot.settings.model.current;
   if (!target) return undefined;
-  const variant = contextBudgetVariant(target.modelId);
+  const variant = contextBudgetVariant(snapshot, target);
   const entry = snapshot.settings.model.available.find(
     (m) =>
       m.ref.providerId === target.providerId &&
-      m.ref.modelId ===
-        (variant ? baseModelId(target.modelId) : target.modelId),
+      m.ref.modelId === (variant?.base.modelId ?? target.modelId),
   );
   const window = entry?.contextWindow;
   const valid =
@@ -148,17 +147,65 @@ export const CONTEXT_BUDGET_VARIANTS = [
   { suffix: "-256k", window: 256_000 },
 ] as const;
 
-export function contextBudgetVariant(
-  modelId: string,
-): (typeof CONTEXT_BUDGET_VARIANTS)[number] | undefined {
-  return CONTEXT_BUDGET_VARIANTS.find((variant) =>
-    modelId.endsWith(variant.suffix),
+type ModelIdentity = { providerId: string; modelId: string };
+const modelIdentityKey = (model: ModelIdentity) =>
+  JSON.stringify([model.providerId, model.modelId]);
+
+/** Allocate one shared, provider-scoped alias table for listing and dispatch. */
+export function contextBudgetVariants(snapshot: Snapshot) {
+  const models = [...snapshot.settings.model.available].sort((a, b) => {
+    const left = modelIdentityKey(a.ref),
+      right = modelIdentityKey(b.ref);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  // Reserve disabled native entries and the saved native current selection too:
+  // an alias must never steal a real identity, even if it is not selectable now.
+  const reserved = new Set(models.map((model) => modelIdentityKey(model.ref)));
+  const current = snapshot.settings.model.current;
+  if (current) reserved.add(modelIdentityKey(current));
+  const variants: Array<{
+    ref: ModelIdentity;
+    base: ModelIdentity;
+    window: number;
+  }> = [];
+  for (const model of models) {
+    for (const budget of CONTEXT_BUDGET_VARIANTS) {
+      let modelId = `${model.ref.modelId}${budget.suffix}`;
+      const occupied = (id: string) =>
+        reserved.has(
+          modelIdentityKey({ providerId: model.ref.providerId, modelId: id }),
+        );
+      if (occupied(modelId)) {
+        const fallback = `${model.ref.modelId}-bb-context${budget.suffix}`;
+        modelId = fallback;
+        for (let index = 2; occupied(modelId); index++)
+          modelId = `${fallback}-${index}`;
+      }
+      const ref = { providerId: model.ref.providerId, modelId };
+      reserved.add(modelIdentityKey(ref));
+      variants.push({ ref, base: model.ref, window: budget.window });
+    }
+  }
+  // Keep resolution for saved budgets when metadata shrinks or is missing.
+  // The selector advertises only budgets smaller than the native window.
+  return variants;
+}
+
+function contextBudgetVariant(snapshot: Snapshot, selection: ModelIdentity) {
+  return contextBudgetVariants(snapshot).find(
+    (variant) =>
+      variant.ref.providerId === selection.providerId &&
+      variant.ref.modelId === selection.modelId,
   );
 }
 
-export function baseModelId(modelId: string): string {
-  const variant = contextBudgetVariant(modelId);
-  return variant ? modelId.slice(0, -variant.suffix.length) : modelId;
+export function baseModelId(
+  snapshot: Snapshot,
+  selection: ModelIdentity,
+): string {
+  return (
+    contextBudgetVariant(snapshot, selection)?.base.modelId ?? selection.modelId
+  );
 }
 
 export function selectedModel(model: string | undefined, reasoning?: string) {

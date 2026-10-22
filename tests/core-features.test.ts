@@ -47,7 +47,11 @@ function harness(
     },
     projection: { turnCount: 0, contextUsed: 1234, contextWindow: 200000 },
   };
-  function event(type: string, payload: unknown = {}) {
+  function event(
+    type: string,
+    payload: unknown = {},
+    nativeTurnId = `native-turn-${turn}`,
+  ) {
     callbacks.notification({
       method: "session/event",
       params: {
@@ -55,7 +59,7 @@ function harness(
         type,
         payload,
         eventSeq: ++seq,
-        turnId: `native-turn-${turn}`,
+        turnId: nativeTurnId,
       },
     });
   }
@@ -1015,4 +1019,266 @@ it("preserves CLI MCP inheritance until the bb tool bridge is enabled", async ()
   expect(
     h.calls.find((c) => c.method === "session/create")?.params.mcpServers,
   ).toBeUndefined();
+});
+
+it.each([
+  ["model-256k"],
+  ["model-256k", "model-bb-context-256k", "model-bb-context-256k-2"],
+])(
+  "allocates a usable budget alias without colliding with native IDs %j",
+  async (...nativeIds: string[]) => {
+    const h = harness();
+    h.snapshot.settings.model.available[0].contextWindow = 1000000;
+    for (const modelId of nativeIds)
+      h.snapshot.settings.model.available.push({
+        ref: { providerId: "test", modelId },
+        label: `Native ${modelId}`,
+        contextWindow: 256000,
+      });
+    const listing = await h.rpc("model/list", { cwd: h.cwd });
+    expect(listing.error).toBeUndefined();
+    const models = record(listing.result).models as Record<string, unknown>[];
+    const ids = models.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const variant = models.find((m) => m.displayName === "Model (256K)")!;
+    expect(variant).toBeDefined();
+    expect(nativeIds.map((id) => `test/${id}`)).not.toContain(variant.id);
+    await h.start({ options: { ...options, model: String(variant.model) } });
+    expect(
+      (
+        await h.rpc("turn/start", {
+          ...h.base,
+          options: { ...options, model: String(variant.model) },
+          input: h.input("hello"),
+          clientRequestId: "creq_abcdefghik",
+        })
+      ).error,
+    ).toBeUndefined();
+    expect(
+      h.calls.find((c) => c.method === "session/send")?.params.modelSelection,
+    ).toEqual({ providerId: "test", modelId: "model" });
+  },
+);
+
+it("connectivity checks preserve native suffix IDs and resolve only catalog aliases", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  h.snapshot.settings.model.available.push({
+    ref: { providerId: "test", modelId: "model-256k" },
+    label: "Real native model",
+    contextWindow: 256000,
+  });
+  const listing = await h.rpc("model/list", { cwd: h.cwd });
+  const variant = (
+    record(listing.result).models as Record<string, unknown>[]
+  ).find((m) => m.displayName === "Model (256K)")!;
+  await h.start();
+  expect((await h.send("/zcode-check test/model-256k")).error).toBeUndefined();
+  expect(
+    (await h.send(`/zcode-check ${variant.model}`, "abcdefghjk")).error,
+  ).toBeUndefined();
+  expect(
+    h.calls
+      .filter((c) => c.method === "provider/testModelConnectivity")
+      .map((c) => record(c.params.selection).modelId),
+  ).toEqual(["model-256k", "model"]);
+});
+
+it("retains the selected context budget on native background follow-ups", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  const variantOptions = { ...options, model: "test/model-256k" };
+  await h.start({ options: variantOptions });
+  expect(
+    (
+      await h.rpc("turn/start", {
+        ...h.base,
+        options: variantOptions,
+        input: h.input("background"),
+        clientRequestId: "creq_abcdefghik",
+      })
+    ).error,
+  ).toBeUndefined();
+  h.event("turn.completed", {
+    resultType: "success",
+    usage: { inputTokens: 100, outputTokens: 20 },
+  });
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "turn.boundary").length === 1,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1)?.size,
+  ).toBe(256000);
+  h.event("turn.started", {}, "native-background-2");
+  h.event(
+    "turn.completed",
+    { resultType: "success", usage: { inputTokens: 120, outputTokens: 20 } },
+    "native-background-2",
+  );
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "turn.boundary").length === 2,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1)?.size,
+  ).toBe(256000);
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "usage")
+      .at(-1)?.modelContextWindow,
+  ).toBe(256000);
+});
+
+it.each([
+  { model: "test/model", window: 1000000 },
+  { model: "test/model-256k", window: 256000 },
+])(
+  "keeps discovered metadata for $model when session/read returns its projection default",
+  async ({ model, window }) => {
+    const h = harness();
+    h.snapshot.settings.model.available[0].contextWindow = 1000000;
+    const selectedOptions = { ...options, model };
+    await h.start({ options: selectedOptions });
+    expect(
+      (
+        await h.rpc("turn/start", {
+          ...h.base,
+          options: selectedOptions,
+          input: h.input("hello"),
+          clientRequestId: "creq_abcdefghik",
+        })
+      ).error,
+    ).toBeUndefined();
+    // ZCode 0.17.0 session/read substitutes its 200K projection default for
+    // the 1M catalog metadata returned by session/create and session/resume.
+    h.snapshot.settings.model.available[0].contextWindow = 200000;
+    h.event("turn.completed", {
+      resultType: "success",
+      usage: { inputTokens: 100, outputTokens: 20 },
+    });
+    await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+    h.event("turn.started", {}, "native-background-refreshed");
+    h.event(
+      "turn.completed",
+      { resultType: "success", usage: { inputTokens: 120, outputTokens: 20 } },
+      "native-background-refreshed",
+    );
+    await h.until(
+      () => h.deltas().filter((d) => d.kind === "turn.boundary").length === 2,
+    );
+    expect(
+      h
+        .deltas()
+        .filter((d) => d.kind === "contextWindow")
+        .map((d) => d.size),
+    ).toEqual([window, window, window]);
+    expect(
+      h
+        .deltas()
+        .filter((d) => d.kind === "usage")
+        .map((d) => d.modelContextWindow),
+    ).toEqual([window, window]);
+  },
+);
+
+it("retains a resumed budget before any new bb prompt is sent", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  expect(
+    (
+      await h.rpc("thread/resume", {
+        ...h.base,
+        cwd: h.cwd,
+        options: { ...options, model: "test/model-256k" },
+        instructionMode: "append",
+      })
+    ).error,
+  ).toBeUndefined();
+  h.event("turn.started", {}, "native-background-resumed");
+  h.event(
+    "turn.completed",
+    { resultType: "success", usage: { inputTokens: 100, outputTokens: 20 } },
+    "native-background-resumed",
+  );
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1)?.size,
+  ).toBe(256000);
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "usage")
+      .at(-1)?.modelContextWindow,
+  ).toBe(256000);
+});
+
+it("does not replace the last accepted context budget on a rejected prompt", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  const variantOptions = { ...options, model: "test/model-256k" };
+  await h.start({ options: variantOptions });
+  expect(
+    (
+      await h.rpc("turn/start", {
+        ...h.base,
+        options: variantOptions,
+        input: h.input("hello"),
+        clientRequestId: "creq_abcdefghik",
+      })
+    ).error,
+  ).toBeUndefined();
+  h.event("turn.completed", {
+    resultType: "success",
+    usage: { inputTokens: 100, outputTokens: 20 },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect((await h.send("reject", "abcdefghjk")).error).toBeDefined();
+  h.event("turn.started", {}, "native-background-rejected");
+  h.event(
+    "turn.completed",
+    { resultType: "success", usage: { inputTokens: 120, outputTokens: 20 } },
+    "native-background-rejected",
+  );
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "turn.boundary").length === 2,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1)?.size,
+  ).toBe(256000);
+});
+
+it("replaces a reporting budget when a new base-model prompt is accepted", async () => {
+  const h = harness();
+  h.snapshot.settings.model.available[0].contextWindow = 1000000;
+  await h.start({ options: { ...options, model: "test/model-256k" } });
+  expect((await h.send("base model")).error).toBeUndefined();
+  h.event("turn.completed", {
+    resultType: "success",
+    usage: { inputTokens: 100, outputTokens: 20 },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "contextWindow")
+      .at(-1)?.size,
+  ).toBe(1000000);
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "usage")
+      .at(-1)?.modelContextWindow,
+  ).toBe(1000000);
 });

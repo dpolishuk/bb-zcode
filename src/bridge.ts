@@ -44,7 +44,7 @@ import {
   modelContextWindow,
   formatContextWindow,
   baseModelId,
-  CONTEXT_BUDGET_VARIANTS,
+  contextBudgetVariants,
   selectedModel,
   type Snapshot,
 } from "./protocol.js";
@@ -97,8 +97,8 @@ type Session = {
   snapshot: Snapshot;
   usage: Usage;
   activeTurnId?: string;
-  /** Model bound to the in-flight turn; drives context-window reporting. */
-  turnModel?: { providerId: string; modelId: string };
+  /** Last accepted bb selection; budgets also apply to native-origin turns. */
+  contextModel?: { providerId: string; modelId: string };
   history: History;
   background: BackgroundWork;
   beforeRowId: number;
@@ -154,7 +154,7 @@ async function checkConnectivity(session: Session, argument: string) {
   // Budget variants have no native registry entry; test their base model.
   const native = {
     ...selection,
-    modelId: baseModelId(selection.modelId),
+    modelId: baseModelId(session.snapshot, selection),
   };
   await session.client.request(
     "provider/testModelConnectivity",
@@ -497,7 +497,6 @@ export function createBridge(
   ) {
     cancelTools(session);
     session.injectedNativeCalls.clear();
-    session.turnModel = undefined;
     const timeline = session.timeline;
     session.timeline = undefined;
     session.activeTurnId = undefined;
@@ -523,7 +522,7 @@ export function createBridge(
       // model's advertised context window (e.g. GLM-5.3's 1M tokens).
       const projected = record(session.snapshot.projection).contextWindow;
       const window =
-        modelContextWindow(session.snapshot, session.turnModel) ??
+        modelContextWindow(session.snapshot, session.contextModel) ??
         (typeof projected === "number" ? projected : null);
       emit(session, session.usage.turn(payload.usage, window));
       try {
@@ -535,13 +534,24 @@ export function createBridge(
           ),
         );
         if (!session.stopping) {
+          // CLI 0.17.0 session/read replaces catalog windows with its 200K
+          // projection default. Keep the discovery metadata for known IDs;
+          // creating/resuming a session refreshes the authoritative catalog.
+          for (const model of snapshot.settings.model.available) {
+            const discovered = session.snapshot.settings.model.available.find(
+              (entry) =>
+                entry.ref.providerId === model.ref.providerId &&
+                entry.ref.modelId === model.ref.modelId,
+            );
+            if (discovered) model.contextWindow = discovered.contextWindow;
+          }
           session.snapshot = snapshot;
           session.background.update(snapshot.projection);
           emit(
             session,
             session.usage.context(
               snapshot.projection,
-              modelContextWindow(snapshot, session.turnModel),
+              modelContextWindow(snapshot, session.contextModel),
             ),
           );
         }
@@ -1043,6 +1053,9 @@ export function createBridge(
         lastSeq: -1,
         snapshot,
         usage: new Usage(restoredUsage),
+        contextModel:
+          selectedModel(params.options.model) ??
+          snapshot.settings.model.current,
         queue: [],
         accepted: new Set(),
         compacting: false,
@@ -1098,10 +1111,7 @@ export function createBridge(
         session,
         session.usage.context(
           snapshot.projection,
-          modelContextWindow(
-            snapshot,
-            selectedModel(text(record(params.options).model)),
-          ),
+          modelContextWindow(snapshot, session.contextModel),
         ),
       );
       return session;
@@ -1213,16 +1223,10 @@ export function createBridge(
         options.model,
         options.reasoningLevel,
       );
-      // Keep bb's raw selection (budget variants included): it drives context
-      // reporting, while modelSelection above carries only native model ids.
+      // Keep the last accepted bb selection across native background turns.
+      // Only modelSelection crosses the native boundary, with its real ID.
       const rawSelection =
         selectedModel(options.model) ?? session.snapshot.settings.model.current;
-      session.turnModel = rawSelection
-        ? {
-            providerId: rawSelection.providerId,
-            modelId: rawSelection.modelId,
-          }
-        : undefined;
       if (
         session.accountError &&
         modelSelection?.providerId.startsWith("account:")
@@ -1256,6 +1260,13 @@ export function createBridge(
           : response.accepted !== true
       )
         throw new Error("ZCode did not accept the prompt.");
+      session.contextModel = rawSelection
+        ? {
+            providerId: rawSelection.providerId,
+            modelId: rawSelection.modelId,
+          }
+        : undefined;
+
       if (!compact) session.skills = undefined;
       if (session.stopping)
         throw new Error("Session stopped while submitting the prompt.");
@@ -1481,6 +1492,7 @@ export function createBridge(
             : available[0]
               ? `${available[0].ref.providerId}/${available[0].ref.modelId}`
               : undefined;
+          const budgetVariants = contextBudgetVariants(snapshot);
           result(id, {
             models: available.length
               ? available.flatMap((model) => {
@@ -1509,17 +1521,22 @@ export function createBridge(
                   // budget variants (e.g. GLM-5.3 (256K)) that run the base
                   // model but cap the window reported to bb. The native
                   // registry has no separate ids for smaller windows.
-                  const variants = CONTEXT_BUDGET_VARIANTS.filter(
-                    (variant) => (window ?? 0) > variant.window,
-                  ).map((variant) => ({
-                    id: `${key}${variant.suffix}`,
-                    model: `${key}${variant.suffix}`,
-                    displayName: `${model.label} (${formatContextWindow(variant.window)})`,
-                    isDefault: false,
-                    description: `${formatContextWindow(variant.window)} token context budget: caps the window reported to bb, while the model keeps its ${formatContextWindow(window!)} native window.`,
-                    supportedReasoningEfforts: efforts,
-                    defaultReasoningEffort: defaultEffort,
-                  }));
+                  const variants = budgetVariants
+                    .filter(
+                      (variant) =>
+                        variant.base.providerId === model.ref.providerId &&
+                        variant.base.modelId === model.ref.modelId &&
+                        (window ?? 0) > variant.window,
+                    )
+                    .map((variant) => ({
+                      id: `${variant.ref.providerId}/${variant.ref.modelId}`,
+                      model: `${variant.ref.providerId}/${variant.ref.modelId}`,
+                      displayName: `${model.label} (${formatContextWindow(variant.window)})`,
+                      isDefault: false,
+                      description: `${formatContextWindow(variant.window)} token context budget: caps the window reported to bb, while the model keeps its ${formatContextWindow(window!)} native window.`,
+                      supportedReasoningEfforts: efforts,
+                      defaultReasoningEffort: defaultEffort,
+                    }));
                   const split = variants.length > 0 && window !== undefined;
                   return [
                     {
