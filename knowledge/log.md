@@ -17,6 +17,10 @@
   fixture and a fresh disposable-bb installation fixture. The latter verified
   installed 1M reporting, checkpoint fork/rewind and background controls with
   synthetic inference; see [validation](../docs/validation.md) for scope.
+- **Updated** [Change verification](runbooks/change-verification.md): mocked
+  sessionless probes must supply an executable explicitly, because launch
+  resolution runs before client injection. Local ZCode discovery can otherwise
+  hide a dependency absent on Linux CI.
 
 ## 2026-10-20
 

@@ -13,6 +13,10 @@ sources:
     resource: https://github.com/dpolishuk/bb-zcode/blob/3dc639de8e7926b2460059dcf20156950fc7f2d3/CONTRIBUTING.md
   - title: docs/validation.md at 3dc639d
     resource: https://github.com/dpolishuk/bb-zcode/blob/3dc639de8e7926b2460059dcf20156950fc7f2d3/docs/validation.md
+  - title: Mocked catalog fixture launch configuration
+    resource: ../../tests/core-features.test.ts
+  - title: Linux CI exposed ambient ZCode dependency in catalog tests
+    resource: https://github.com/dpolishuk/bb-zcode/actions/runs/39770947034
 generated:
   by: zcode-agent/GLM-5.3
   at: 2026-10-20T11:15:00Z
@@ -21,6 +25,8 @@ verified:
     at: 2026-10-20T11:15:00Z
   - by: zcode-agent/GLM-5.3
     at: 2026-10-20T11:23:47Z
+  - by: Codex
+    at: 2026-10-22T11:31:00Z
 ---
 
 # Change verification
@@ -42,6 +48,13 @@ change types to checks and records the evidence boundaries.
 `npm run check` = `marketplace:check` + `typecheck` + `test` + `build`. The
 build step needs bb's CLI; on a machine without the desktop app install the
 pinned builder with `npm install --no-save --ignore-scripts bb-app@0.46.1`.
+
+Mocked-client tests still pass through launch resolution before their client
+factory is called. Supply `providerOptions.executable: process.execPath` for
+sessionless catalog/health probes as well as thread options; otherwise a Mac
+with ZCode installed can hide a Linux CI failure. This fixture requirement was
+verified in PR #1 on 2026-10-22; the historical runtime baselines below retain
+their stated dates.
 
 ## What CI runs
 

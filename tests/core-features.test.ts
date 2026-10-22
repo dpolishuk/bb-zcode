@@ -505,7 +505,10 @@ it("sizes the context meter from model metadata even when the projection keeps i
 it("advertises each model's context window in model/list descriptions", async () => {
   const h = harness();
   h.snapshot.settings.model.available[0].contextWindow = 1000000;
-  const reply = await h.rpc("model/list", { cwd: h.cwd });
+  const reply = await h.rpc("model/list", {
+    cwd: h.cwd,
+    providerOptions: options.providerOptions,
+  });
   expect(reply.error).toBeUndefined();
   const models = record(reply.result).models;
   expect(Array.isArray(models)).toBe(true);
@@ -520,7 +523,10 @@ it("advertises each model's context window in model/list descriptions", async ()
 it("lists a context-budget variant next to each model with a larger native window", async () => {
   const h = harness();
   h.snapshot.settings.model.available[0].contextWindow = 1000000;
-  const reply = await h.rpc("model/list", { cwd: h.cwd });
+  const reply = await h.rpc("model/list", {
+    cwd: h.cwd,
+    providerOptions: options.providerOptions,
+  });
   const models = record(reply.result).models as Record<string, unknown>[];
   expect(models.map((m) => m.displayName)).toEqual([
     "Model (1M)",
@@ -1035,7 +1041,10 @@ it.each([
         label: `Native ${modelId}`,
         contextWindow: 256000,
       });
-    const listing = await h.rpc("model/list", { cwd: h.cwd });
+    const listing = await h.rpc("model/list", {
+      cwd: h.cwd,
+      providerOptions: options.providerOptions,
+    });
     expect(listing.error).toBeUndefined();
     const models = record(listing.result).models as Record<string, unknown>[];
     const ids = models.map((m) => m.id);
@@ -1068,7 +1077,10 @@ it("connectivity checks preserve native suffix IDs and resolve only catalog alia
     label: "Real native model",
     contextWindow: 256000,
   });
-  const listing = await h.rpc("model/list", { cwd: h.cwd });
+  const listing = await h.rpc("model/list", {
+    cwd: h.cwd,
+    providerOptions: options.providerOptions,
+  });
   const variant = (
     record(listing.result).models as Record<string, unknown>[]
   ).find((m) => m.displayName === "Model (256K)")!;
