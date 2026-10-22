@@ -18,6 +18,12 @@ sources:
     resource: https://github.com/get-bb/bb/tree/9937c46f5c7e369de3563eb864c8cbc4c3b9c231
   - title: ZCode upstream at 0a1fc56 (v0.5.0 contract refresh)
     resource: https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411
+  - title: Current model identity and context-budget translation
+    resource: ../../src/protocol.ts
+  - title: Native model identity and budget regression tests
+    resource: ../../tests/protocol.test.ts
+  - title: Catalog, connectivity, and follow-up regressions
+    resource: ../../tests/core-features.test.ts
 generated:
   by: zcode-agent/GLM-5.3
   at: 2026-10-20T11:15:00Z
@@ -26,6 +32,8 @@ verified:
     at: 2026-10-20T11:15:00Z
   - by: zcode-agent/GLM-5.3
     at: 2026-10-20T11:23:47Z
+  - by: Codex
+    at: 2026-10-22T11:22:00Z
 ---
 
 # Protocol contracts
@@ -94,6 +102,26 @@ snapshots.
 - **Reasoning fallback**: a requested or saved reasoning level that the
   selected model does not list falls back to the native default level, as
   required by bb's bridge contract (`modelForTurn` in `src/protocol.ts`).
+- **Context-budget aliases** are allocated from the native catalog, scoped
+  to a provider. The allocator reserves every native identity, including
+  disabled entries and the current native selection. `model-256k` is the
+  usual alias for a 256,000-token reporting budget; collisions use
+  `model-bb-context-256k`, then numbered alternatives. Sorted allocation makes
+  aliases independent of native catalog ordering. Listing, prompt dispatch,
+  context reporting and connectivity checks use the same mapping; a real or
+  unknown suffixed model ID is never stripped just because of its suffix.
+- **Reported context windows** prefer positive finite model metadata over
+  the native projection's pre-bind default. Windows for known provider/model
+  identities come from session creation or resume: CLI 0.17.0's `session/read`
+  replaces those values with its 200K projection default, so projection
+  refreshes retain the discovered windows. A new/resumed session refreshes
+  them from the catalog. Advertised budget variants are
+  smaller than the native window and reuse the base model's reasoning
+  choices. A saved variant remains resolvable if window metadata shrinks or
+  is missing, and never enlarges a known native window. The budget caps bb's
+  meter and usage fields; it does not constrain native inference or
+  compaction. Selection lifetime is defined by
+  [Session invariants](../architecture/session-invariants.md#context-selection-lifetime).
 - **Permission modes** (`modeFor` in `src/bridge.ts`):
 
   | bb side                 | ZCode mode |
@@ -115,5 +143,10 @@ committed catalog must be regenerated in the same change
 
 ## Related knowledge
 
+- Model identity and reporting-window rules were re-verified on 2026-10-22:
+  protocol/bridge regressions and the real CLI 0.17.0 loopback fixture passed,
+  including cold resume and native background follow-ups. This refresh does
+  not change the historical upstream pins above; see the dated
+  [validation record](../../docs/validation.md).
 - How the modules implement these contracts: [System overview](../architecture/system-overview.md).
 - What a contract change must re-verify: [Change verification](../runbooks/change-verification.md).

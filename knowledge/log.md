@@ -1,5 +1,27 @@
 # Knowledge log
 
+## 2026-10-22
+
+- **Updated** [Protocol contracts](contracts/protocol-contracts.md): context
+  budgets use a deterministic provider-scoped alias table that reserves native
+  model identities; suffixes alone never authorize rewriting a model ID.
+- **Updated** [Session invariants](architecture/session-invariants.md): reporting
+  selections survive settlement and resume for native background follow-ups,
+  change only after accepted submissions, and do not enforce native budgets.
+  Regression coverage is linked from both documents.
+- **Verified** The isolated CLI 0.17.0 fixture returns 1M model metadata from
+  `session/create`, then 200K for the same identity from `session/read`.
+  Discovery windows must survive projection refreshes; both base and budget
+  reporting have focused regressions for this native behavior.
+- **Verified** PR #1's candidate passed 175 automated tests, its direct CLI
+  fixture and a fresh disposable-bb installation fixture. The latter verified
+  installed 1M reporting, checkpoint fork/rewind and background controls with
+  synthetic inference; see [validation](../docs/validation.md) for scope.
+- **Updated** [Change verification](runbooks/change-verification.md): mocked
+  sessionless probes must supply an executable explicitly, because launch
+  resolution runs before client injection. Local ZCode discovery can otherwise
+  hide a dependency absent on Linux CI.
+
 ## 2026-10-20
 
 - **Added** Initial OKF v0.2 bundle: this index,

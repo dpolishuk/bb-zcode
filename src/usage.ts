@@ -45,10 +45,10 @@ export class Usage {
     ];
   }
 
-  context(raw: unknown): ThreadDelta[] {
+  context(raw: unknown, windowOverride?: number): ThreadDelta[] {
     const p = record(raw),
       used = count(p.contextUsed),
-      size = count(p.contextWindow);
+      size = count(windowOverride ?? p.contextWindow);
     if (used === undefined || size === undefined || size === 0) return [];
     return [
       {

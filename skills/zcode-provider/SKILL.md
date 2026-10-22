@@ -24,6 +24,17 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
   supported. Follow-ups wait for a turn boundary; they do not inject into an
   active model loop. Native bb forks and edit-message/rewind use exact persisted
   assistant checkpoints; missing/stale targets fail explicitly.
+- The context meter is sized from each model's advertised window (GLM-5.3:
+  1M tokens; the native projection keeps a smaller pre-bind default), and
+  `model/list` descriptions carry the window because bb model entries have
+  no numeric field for it.
+- Models with a larger native window also list context-budget variants, e.g.
+  `GLM-5.3 (256K)` next to `GLM-5.3 (1M)`. A variant runs the same base
+  native model but caps the window reported to bb. The cap survives native
+  background follow-ups and resume; accepting a new model selection replaces
+  it. Use the exact ID from `model/list`: only generated aliases map to the
+  base model, and real native IDs (including those ending in `-256k`) stay
+  unchanged. A reporting cap does not change ZCode's native compaction window.
 - Enable `bbToolsEnabled` for bb-injected tools. It is off by default to preserve
   CLI MCP inheritance; when enabled, list other custom servers in `mcpServers`.
   These tools run through a session-scoped local MCP endpoint and bb’s tool
