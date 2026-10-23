@@ -336,6 +336,15 @@ export const managementCommands: Array<Record<string, string>> = [
       "Manage native ZCode plugins: list, install, update, uninstall, enable, disable, marketplace",
     inputHint: "<action> [args]",
   },
+  {
+    name: "zcode-automations",
+    description: "List ZCode scheduled tasks with their next runs",
+  },
+  {
+    name: "zcode-automation-delete",
+    description: "Delete one ZCode scheduled task by id",
+    inputHint: "<automation-id>",
+  },
 ];
 export class BackgroundWork {
   private jobs = new Map<

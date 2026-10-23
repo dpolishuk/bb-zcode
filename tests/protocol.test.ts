@@ -196,7 +196,11 @@ it("passes executable arguments as an argv array without a shell", () => {
   expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
 });
 it("only imports public SDK surfaces and declared dependencies", async () => {
-  const scan = await experimental_scanPublicSdkOnly(process.cwd());
+  // cron-parser is the one declared runtime dependency beyond the SDK's
+  // fixed allowlist; it computes automation schedules in src/automations.ts.
+  const scan = await experimental_scanPublicSdkOnly(process.cwd(), {
+    allow: [/^cron-parser$/u],
+  });
   expect(scan.violations).toEqual([]);
   expect(scan.privateDependencies).toEqual([]);
 });

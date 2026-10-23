@@ -100,31 +100,39 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
   launch, permissions, lifecycle) that needs explicit maintainer approval
   before any implementation.
 
-## Stage 6 — automations and Off-Peak mapping
+## Stage 6 — automations (done in v0.10.0), Off-Peak still blocked
 
-Choose between mapping native `automation/*`/`offPeak/*` onto bb's own
-automations (inter-plugin RPC) or persisting schedules in plugin storage.
-Full native-scheduler parity is not promised. Note (2026-10-23): upstream
-ships open host-side reference implementations in `packages/services`
-(`AutomationService`/`AutomationRepo`, `OffPeakTaskService`/`OffPeakTaskRepo`,
-and the `zcodeAgentService` handlers that answer the reverse RPCs); a
-plugin-side assembly no longer has to invent the service shapes. The
-scheduler loop and browser executor are desktop-host injections
-(`createLocalServices` in `packages/services/src/node.ts`), so browser stays
-on the stage 5 CDP decision.
+Native automations shipped plugin-side (2026-10-23): `src/automations.ts`
+answers the five `automation/*` reverse RPCs from a JSON store in
+`BB_BRIDGE_DIR` with upstream-matching snapshots, and a bridge-worker
+scheduler dispatches due tasks by cold-resuming the bound session with the
+saved provider options, model and mode plus the native `automationId`
+marker. The `automationsEnabled` setting (off by default) gates both the
+ports and the Cron tools (denylisted when off). Limits: runs fire only
+while bb is open; busy sessions defer ten minutes; three consecutive
+failures park a schedule as `failed`. The upstream reference
+implementations in `packages/services` (`AutomationService`/`OffPeakTaskService`,
+`zcodeAgentService` handlers) informed the shapes; see the
+[host-boundary amendment](zcode-desktop-host-boundary.md). Off-Peak remains
+unregistered: execution needs the Z.ai gateway ticket client and
+plan-gated quotas, and the browser executor stays a Desktop-only injection
+
+- both still wait on a deliberate decision or an upstream surface.
 
 ## Stage 7 — MCP Apps / Gen UI (experimental)
 
 Map `mcp/ui*` (16 methods) onto bb plugin UI surfaces (fixed tabs, browser
 pages). Long-term; upstream itself limits interactive pages.
 
-## Stages 6-7 — same upstream blocker
+## Stages 6-7 remainder — Off-Peak and MCP Apps still blocked on hosts
 
-Automations/Off-Peak (stage 6) and MCP Apps / Gen UI (stage 7) hit the same
-wall: they are CLI→host reverse RPCs with no channel through the provider
-bridge. They are covered by the same upstream request
-([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)); no further
-plugin-side work is possible until bb answers.
+Off-Peak execution and MCP Apps / Gen UI hit the same wall as before:
+Off-Peak needs the Z.ai gateway ticket client plus desktop-host scheduler
+injections, and `mcp/ui*` is a CLI→host reverse RPC with no channel through
+the provider bridge. They remain covered by
+([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)) and the
+[host-boundary decision](zcode-desktop-host-boundary.md); the v0.10.0
+automation host does not change their status.
 
 ## Out of scope for this plugin
 

@@ -50,6 +50,7 @@ export function runtimeSettings(raw: unknown) {
   const p = record(raw);
   const subagents = parseSubagents(p.subagents);
   return {
+    automationsEnabled: p.automationsEnabled === true,
     bbToolsEnabled: p.bbToolsEnabled === true,
     preferences: {
       ...RUNTIME_PREFERENCES,

@@ -83,6 +83,13 @@ export default async function plugin(bb: BbPluginApi) {
         "Expose bb tools to ZCode. Overrides the CLI MCP server list; list other custom servers in MCP servers above. Applies to new sessions.",
       default: false,
     },
+    automationsEnabled: {
+      type: "boolean",
+      label: "ZCode automations",
+      description:
+        "Let ZCode sessions create scheduled tasks (CronCreate) and run them in this bb while it is open. Applies to new sessions.",
+      default: false,
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   function register(values: {
@@ -94,6 +101,7 @@ export default async function plugin(bb: BbPluginApi) {
     mcpServers: string;
     subagents: string;
     bbToolsEnabled: boolean;
+    automationsEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     const launch = {
@@ -105,6 +113,7 @@ export default async function plugin(bb: BbPluginApi) {
       mcpServers: values.mcpServers,
       subagents: values.subagents,
       bbToolsEnabled: values.bbToolsEnabled,
+      automationsEnabled: values.automationsEnabled,
     };
     registered?.dispose();
     registered = bb.providers.register({

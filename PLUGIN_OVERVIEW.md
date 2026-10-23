@@ -35,8 +35,10 @@ other custom servers in the plugin when enabling it.
 
 Bash commands have command rows; other native tools use generic rows with nested
 attribution. bb skills are exposed through a file catalog, not the native Skill
-registry. Follow-ups queue at turn boundaries. Full subagent trees, browser host
-control, interactive plugin UI and workflow/scheduler services remain unsupported.
+registry. Follow-ups queue at turn boundaries. Native scheduled tasks (Cron
+tools) are opt-in via `automationsEnabled` and run only while bb is open. Full
+subagent trees, browser host control, interactive plugin UI and Off-Peak/workflow
+services remain unsupported.
 History controls require compatible native v4 queries. Conversation rewind
 preserves files; file rollback uses separate preview/apply commands. ZCode may
 automatically notify its model when background work completes or is cancelled.

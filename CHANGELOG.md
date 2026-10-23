@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.0 — 2026-10-23
+
+- Host ZCode's native automations inside the plugin (roadmap stage 6). A new
+  `automationsEnabled` setting (off by default) lets sessions use the native
+  Cron tools: the bridge answers the five `automation/*` reverse RPCs
+  (create/update/list/delete/checkTaskBinding) from a local JSON store with
+  upstream-matching snapshots, including interval carriers, relative
+  one-shots, `maxRuns`, the 20-task create limit, and permanent one-task
+  binding per session with fail-closed binding checks on a damaged store.
+- Run schedules locally. A scheduler in the bridge worker fires due tasks
+  while bb is open: it cold-resumes the bound native session with the saved
+  provider options, model and mode, sends the prompt with the native
+  `automationId` marker (blocking recursive task creation), streams the run
+  into the same bb thread, records run counts/lifecycle, defers busy
+  sessions up to ten minutes, and fails a schedule after three consecutive
+  run failures. Runs missed while bb is closed are skipped. Off-Peak tasks
+  stay unsupported and unregistered.
+- Add `/zcode-automations` (list with next runs) and
+  `/zcode-automation-delete <id>` management commands. With the setting off
+  the Cron tools are hidden from the model instead of erroring.
+
 ## 0.9.8 — 2026-10-22
 
 - Use the official Z.ai brand mark in both icons. The store badge is now

@@ -10,6 +10,7 @@
 | `memoryEnabled`                   | `false`     | Allow native ZCode memory in new sessions                                                      |
 | `nativeSearchEnhancementsEnabled` | `false`     | Enable native enhanced find/grep in new sessions                                               |
 | `bbToolsEnabled`                  | `false`     | Enable the bb tool bridge; overrides native CLI MCP server list                                |
+| `automationsEnabled`              | `false`     | Let sessions create scheduled tasks (Cron tools) and run them while bb is open                 |
 | `subagents`                       | Empty       | JSON native subagent snapshot; empty inherits native configuration                             |
 | `mcpServers`                      | `[]`        | JSON array of native MCP server definitions; empty inherits CLI settings when bb tools are off |
 
@@ -30,8 +31,35 @@ Host environment overrides:
 - `BB_ZCODE_NODE_EXECUTABLE`: overrides the Node executable.
 - `BB_CLI`: an explicit bb CLI executable for `scripts/bb.mjs`.
 
-ZCode's own configuration environment is inherited. Arguments are passed as
-an argv array; there is no shell interpolation.
+ZCode's own configuration environment is inherited. Arguments are passed
+as an argv array; there is no shell interpolation.
+
+## Scheduled tasks
+
+Enable `automationsEnabled` to let ZCode sessions create scheduled tasks
+through the native Cron tools (`CronCreate`, `CronList`, `CronUpdate`,
+`CronDelete`). The plugin answers the native `automation/*` host ports from
+a local store (`automations.json` in the plugin's bridge-data directory) and
+runs schedules itself:
+
+- Runs dispatch into the session that created the task: the plugin
+  cold-resumes the saved native session, applies the saved model and mode,
+  and sends the prompt with the native automation marker, so ZCode blocks
+  recursive task creation for that turn. The reply streams into the same bb
+  thread.
+- The scheduler lives in the bridge worker and only runs while bb is open -
+  like ZCode Desktop, schedules do not fire while the app is closed. Runs
+  missed while closed are skipped; recurring schedules continue from the
+  next occurrence.
+- A thread busy at fire time defers up to ten minutes, then records a
+  failed run. Three consecutive failures pause the schedule as `failed`.
+- Cron expressions follow the machine's local timezone. Every session can
+  hold at most one task, permanently - matching native semantics.
+
+Manage tasks from any idle ZCode session with `/zcode-automations` (list
+with next runs) and `/zcode-automation-delete <id>`. With the setting off,
+the Cron tools stay hidden from the model entirely. Off-Peak tasks remain
+unsupported (their tool is not registered).
 
 ## Models
 

@@ -181,11 +181,12 @@ implemented but has not received the same live verification.
 - bb archive and rename actions work, with names and archive state kept in
   bb (ZCode title generation stays off); clearing a thread goal calls the
   native session goal action. `/zcode-plugin` manages ZCode's own plugins
-  from bb. Full unified-diff views, cost billing and a full subagent tree
-  remain unsupported.
-- Browser Use, interactive plugin UI, and workflow/scheduler host services need
-  further integration; native attempts fail with a clear message pointing to
-  ZCode Desktop.
+  from bb. Native scheduled tasks (Cron tools) work with the
+  `automationsEnabled` setting and run while bb is open. Full unified-diff
+  views, cost billing and a full subagent tree remain unsupported.
+- Browser Use, interactive plugin UI, and Off-Peak/workflow host services
+  need further integration; native attempts fail with a clear message
+  pointing to ZCode Desktop.
 - ZCode labels this session API as legacy while migrating its desktop protocol.
   Future CLI versions may require adapter changes.
 

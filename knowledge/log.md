@@ -1,5 +1,25 @@
 # Knowledge log
 
+## 2026-10-23 (v0.10.0)
+
+- **Added** Plugin-side automation host (roadmap stage 6 done):
+  `src/automations.ts` answers the five `automation/*` native reverse RPCs
+  from a JSON store in `BB_BRIDGE_DIR` (host daemon's per-plugin
+  `bridge-data` dir), mirroring the upstream schemas pinned 2026-10-23
+  (interval carriers → `scheduleRule`, relative one-shots, `maxRuns`,
+  20-task limit with `AUTOMATION_CREATE_LIMIT_REACHED`, permanent
+  one-task-per-session binding, fail-closed on an unparsable store). The
+  bridge-worker scheduler cold-resumes the bound session with saved
+  provider options/model/mode and the `session/send` `automationId` marker;
+  settle() reports run outcome. Gate: `automationsEnabled` (default off)
+  also denylists `CronCreate/CronList/CronUpdate/CronDelete` at
+  create/resume when off. Constraint learned: the CLI attaches
+  `automationPort` unconditionally for local sessions, so the tools were
+  already model-visible before this change. Off-Peak stays unregistered
+  (`offPeakToolEnabled` never passed). Focus: tests/automations.test.ts
+  (store + dispatch-level). [Feature roadmap](decisions/feature-roadmap.md)
+  and [capability audit](../docs/capability-audit.md) updated.
+
 ## 2026-10-23
 
 - **Amended** [ZCode Desktop host boundary](decisions/zcode-desktop-host-boundary.md)

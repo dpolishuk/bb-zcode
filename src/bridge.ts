@@ -63,6 +63,14 @@ import {
 } from "./tool-server.js";
 
 import { History, BackgroundWork, managementCommands } from "./lifecycle.js";
+import {
+  AUTOMATION_METHODS,
+  CRON_TOOL_NAMES,
+  createAutomationService,
+  dispatchPermissionMode,
+  type AutomationService,
+  type StoredAutomation,
+} from "./automations.js";
 
 type Message = Record<string, unknown>;
 
@@ -73,7 +81,6 @@ function hostServiceUnavailable(method: string): string | undefined {
     method === "interaction/browserExecute"
   )
     return "Browser control";
-  if (method.startsWith("automation/")) return "ZCode automations";
   if (method.startsWith("offPeak/")) return "ZCode Off-Peak tasks";
   if (method === "bot/channel/reply") return "ZCode topic resources";
   if (method.startsWith("mcp/ui")) return "ZCode MCP Apps";
@@ -109,6 +116,12 @@ type Session = {
   toolServer?: ToolServer;
   skills?: string;
   injectedNativeCalls: Set<string>;
+  /** Launch/provider options snapshot for headless automation dispatch. */
+  providerOptions?: unknown;
+  /** Set while a scheduled-task turn runs; settle() reports it to the store. */
+  dispatchingAutomationId?: string;
+  /** True when the dispatcher constructed this session and owns its release. */
+  automationOwned?: boolean;
 };
 type ClientFactory = (
   launch: LaunchSpec,
@@ -332,12 +345,31 @@ async function managePlugins(session: Session, argument: string) {
   }
 }
 
+async function manageAutomations(
+  service: AutomationService,
+  command: string,
+  argument: string,
+) {
+  // Scheduled tasks are store-global; any idle session can inspect them.
+  if (command === "zcode-automations") return service.describe();
+  const id = argument.trim();
+  if (!id)
+    throw new ProtocolError(
+      "Usage: /zcode-automation-delete <automation-id>",
+      -32000,
+    );
+  if (!(await service.removeById(id)))
+    throw new ProtocolError(`No scheduled task ${id}.`, -32000);
+  return `Deleted scheduled task ${id}.`;
+}
+
 export function createBridge(
   config: {
     write?: (message: Message) => void;
     clientFactory?: ClientFactory;
     env?: NodeJS.ProcessEnv;
     accountFactory?: (launch: LaunchSpec) => AccountHost;
+    automationTickMs?: number;
   } = {},
 ) {
   const write =
@@ -372,6 +404,12 @@ export function createBridge(
     }
   >();
   let closed = false;
+  // Scheduled tasks: one service and scheduler per bridge worker. The store
+  // is shared by every thread's session; the scheduler only runs while this
+  // worker (and therefore bb) is alive.
+  let automations: AutomationService | undefined;
+  let automationTimer: ReturnType<typeof setInterval> | undefined;
+  const dispatching = new Set<string>();
   const notify = (method: string, params: unknown) =>
     write({ jsonrpc: "2.0", method, params });
   const emit = (session: Session, deltas: ThreadDelta[]) =>
@@ -508,6 +546,22 @@ export function createBridge(
         interactions.delete(id);
         pending.resolve({ decision: "deny" });
       }
+    if (session.dispatchingAutomationId) {
+      const id = session.dispatchingAutomationId;
+      session.dispatchingAutomationId = undefined;
+      void automations
+        ?.completeRun(
+          id,
+          status === "completed",
+          status === "completed" ? undefined : `Scheduled turn ${status}.`,
+        )
+        .catch(() => undefined);
+      // The dispatcher owns sessions it constructed headlessly; release the
+      // child unless the user interleaved a queued prompt. A queued turn
+      // keeps the session alive for bb's normal idle lifecycle to release.
+      if (session.automationOwned && !session.stopping && !session.queue.length)
+        void release(session, false, false).catch(() => undefined);
+    }
   }
 
   async function finishTurn(
@@ -748,6 +802,19 @@ export function createBridge(
         errorMessage: "No active bb session for ZCode account authentication.",
       };
     }
+    if (AUTOMATION_METHODS.has(method)) {
+      if (!automations)
+        throw new ProtocolError(
+          "ZCode automations are disabled. Enable the plugin's automations setting, or use ZCode Desktop for this feature.",
+          -32601,
+        );
+      return automations.handle(method, raw, {
+        threadId: session?.threadId,
+        providerThreadId: session?.providerThreadId,
+        cwd: session?.cwd,
+        providerOptions: session?.providerOptions,
+      });
+    }
     // These native ports need a host service bb's provider bridge does not
     // expose (verified against SDK 0.6.49: BRIDGE_REQUEST_METHODS has no
     // host-service channel). Reject uniformly with an actionable reason
@@ -907,6 +974,155 @@ export function createBridge(
     if (ended) emit(session, [{ kind: "session.ended" }]);
   }
 
+  function ensureAutomations(): void {
+    if (automations || closed) return;
+    automations = createAutomationService();
+    automationTimer = setInterval(
+      () => void automationTick(),
+      config.automationTickMs ?? 30_000,
+    );
+    // The worker's stdio/SIGTERM handlers own its lifetime; the timer must
+    // not hold the process open on shutdown.
+    automationTimer.unref?.();
+    void automationTick();
+  }
+
+  async function manageAutomationsChecked(command: string, argument: string) {
+    if (!automations)
+      throw new ProtocolError(
+        "ZCode automations are disabled. Enable the plugin's automations setting.",
+        -32000,
+      );
+    return manageAutomations(automations, command, argument);
+  }
+
+  async function automationTick(): Promise<void> {
+    if (!automations || closed) return;
+    await automations.ready().catch(() => undefined);
+    if (closed) return;
+    const at = new Date();
+    for (const entry of automations.due(at)) {
+      // Bounded concurrency across threads, one run per automation.
+      if (dispatching.size >= 2) break;
+      if (!automations.beginRun(entry.automationId, at)) continue;
+      if (automations.runOverdue(entry.automationId, at)) {
+        void automations
+          .completeRun(
+            entry.automationId,
+            false,
+            "Session stayed busy for ten minutes.",
+          )
+          .catch(() => undefined);
+        continue;
+      }
+      dispatching.add(entry.automationId);
+      void dispatchAutomation(entry.automationId)
+        .catch(() => undefined)
+        .finally(() => dispatching.delete(entry.automationId));
+    }
+  }
+
+  function automationOptions(entry: StoredAutomation): BridgeExecutionOptions {
+    const permissionMode = dispatchPermissionMode(entry.mode);
+    const shared = {
+      ...(entry.mode === "plan" ? { promptMode: "plan" as const } : {}),
+      ...(entry.modelSelection
+        ? {
+            model: `${entry.modelSelection.providerId}/${entry.modelSelection.modelId}`,
+          }
+        : {}),
+      ...(entry.providerOptions !== undefined
+        ? { providerOptions: entry.providerOptions as Record<string, unknown> }
+        : {}),
+    };
+    return permissionMode === "full"
+      ? {
+          permissionMode: "full",
+          permissionScope: "full",
+          approvalReviewer: null,
+          permissionEscalation: null,
+          ...shared,
+        }
+      : {
+          permissionMode: "accept-edits",
+          permissionScope: "workspace",
+          approvalReviewer: "user",
+          permissionEscalation: "ask",
+          ...shared,
+        };
+  }
+
+  async function dispatchAutomation(id: string): Promise<void> {
+    if (!automations) return;
+    const entry = await automations.find(id);
+    // Deleted while queued: remove() already cleared its run reservation.
+    if (!entry || !entry.targetTaskId) return;
+    const at = new Date();
+    const existing = sessions.get(entry.threadId);
+    if (
+      existing &&
+      (existing.timeline ||
+        existing.starting ||
+        existing.stopping ||
+        existing.draining ||
+        existing.background.active)
+    ) {
+      automations.deferRun(id, at);
+      return;
+    }
+    let session = existing;
+    let owned = false;
+    // A thread still constructing its session retries on the next tick
+    // instead of recording a failure.
+    if (
+      !session &&
+      (constructing.has(entry.threadId) || startingClients.has(entry.threadId))
+    ) {
+      automations!.retryRun(id);
+      return;
+    }
+    try {
+      if (!session) {
+        // Cold-resume the bound native session with the settings snapshot
+        // captured at creation; scheduled turns never manage schedules.
+        session = await construct(
+          {
+            threadId: entry.threadId,
+            cwd: entry.workspacePath,
+            providerThreadId: entry.targetTaskId,
+            instructionMode: "replace",
+            options: automationOptions(entry),
+            disallowedTools: [...CRON_TOOL_NAMES],
+          },
+          true,
+        );
+        owned = true;
+        session.automationOwned = true;
+        session.providerOptions = entry.providerOptions;
+      }
+      session.dispatchingAutomationId = id;
+      await send(
+        session,
+        [{ type: "text", text: entry.prompt, mentions: [] }],
+        automationOptions(entry),
+        undefined,
+        id,
+      );
+      // Turn completion is reported by settle() through the marker above.
+    } catch (failure) {
+      if (session) session.dispatchingAutomationId = undefined;
+      if (owned && session)
+        await release(session, true, false).catch(() => undefined);
+      await automations
+        .completeRun(
+          id,
+          false,
+          failure instanceof Error ? failure.message : String(failure),
+        )
+        .catch(() => undefined);
+    }
+  }
+
   async function construct(
     params:
       | z.infer<typeof threadStartParamsSchema>
@@ -985,6 +1201,13 @@ export function createBridge(
       startingClients.set(params.threadId, client);
       const accountError = await prepareAccount(account, client);
       const mode = modeFor(params.options);
+      if (settings.automationsEnabled) ensureAutomations();
+      // With automations off the native cron tools stay hidden instead of
+      // erroring at call time; with them on, the bridge answers the ports.
+      const disallowedTools = [
+        ...(params.disallowedTools ?? []),
+        ...(settings.automationsEnabled ? [] : CRON_TOOL_NAMES),
+      ];
       const response = await client.request(
         resume ? "session/resume" : "session/create",
         {
@@ -1001,9 +1224,7 @@ export function createBridge(
               }),
           workspace: workspaceRef(params.cwd),
           ...(mcpServers.length ? { mcpServers } : {}),
-          ...(params.disallowedTools?.length
-            ? { toolDenylist: params.disallowedTools }
-            : {}),
+          ...(disallowedTools.length ? { toolDenylist: disallowedTools } : {}),
         },
       );
       const snapshot = snapshotSchema.parse(response);
@@ -1046,6 +1267,7 @@ export function createBridge(
         account,
         accountError,
         cwd: params.cwd,
+        providerOptions: params.options.providerOptions,
         mode,
         starting: false,
         buffered: [],
@@ -1135,6 +1357,7 @@ export function createBridge(
     input: PromptInput[],
     options: BridgeExecutionOptions,
     clientRequestId?: string,
+    automationId?: string,
   ) {
     if (
       session.timeline ||
@@ -1152,7 +1375,7 @@ export function createBridge(
       const prompt = material.content;
       const command =
         !material.attachments &&
-        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin)(?:\s+(.*))?$/.exec(
+        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin|zcode-automations|zcode-automation-delete)(?:\s+(.*))?$/.exec(
           prompt.trim(),
         );
       if (command) {
@@ -1181,7 +1404,10 @@ export function createBridge(
                 ? await checkConnectivity(session, argument)
                 : command[1] === "zcode-plugin"
                   ? await managePlugins(session, argument)
-                  : await session.background.manage(command[1]!, argument);
+                  : command[1] === "zcode-automations" ||
+                      command[1] === "zcode-automation-delete"
+                    ? await manageAutomationsChecked(command[1], argument)
+                    : await session.background.manage(command[1]!, argument);
         if (session.stopping)
           throw new Error("Session stopped while managing tasks.");
         if (clientRequestId) session.accepted.add(clientRequestId);
@@ -1249,6 +1475,7 @@ export function createBridge(
                     ? { attachments: material.attachments }
                     : {}),
                   ...(modelSelection ? { modelSelection } : {}),
+                  ...(automationId ? { automationId } : {}),
                 }
               : {}),
           },
@@ -1863,6 +2090,7 @@ export function createBridge(
   }
   async function close() {
     closed = true;
+    if (automationTimer) clearInterval(automationTimer);
     for (const account of accounts.values()) account.close();
     await Promise.allSettled(
       [...sessions.values()].map((session) => release(session, true)),

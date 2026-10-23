@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zcode",
-  "version": "0.9.8",
+  "version": "0.10.0",
   "private": true,
   "license": "MIT",
   "author": "Dmitry Polishuk (https://github.com/dpolishuk)",
@@ -55,12 +55,12 @@
   },
   "dependencies": {
     "@get-bb/plugin-sdk": "0.6.49",
+    "cron-parser": "^5.5.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "better-sqlite3": "^12.10.0",
-    "cron-parser": "^5.5.0",
     "hono": "^4.13.13",
     "prettier": "^3.9.10",
     "tsx": "^4.20.0",
