@@ -1,10 +1,10 @@
 ---
 type: decision
 title: ZCode Desktop host services cannot be proxied by attaching to the running app
-description: Why "connect to the running ZCode Desktop over RPC" was investigated and rejected as an alternative to the missing bb host-service channel - ephemeral loopback ports, launch-scoped handles, peer validation.
+description: Why "connect to the running ZCode Desktop over RPC" was investigated and rejected - ephemeral loopback ports, launch-scoped handles, peer validation - and what the open zcode --web / packages/server surface does and does not change (amended 2026-10-23).
 status: stable
 stale_after: 2027-01-23T00:00:00Z
-tags: [decision, host-services, zcode-desktop, browser-control]
+tags: [decision, host-services, zcode-desktop, browser-control, zcode-web]
 sources:
   - title: ZCode Desktop 3.16.2 app bundle, out/host/index.js and out/scheduler/index.js (listener construction, launch handles)
     resource: /Applications/ZCode.app/Contents/Resources/app.asar (extracted and inspected 2026-10-23)
@@ -14,12 +14,20 @@ sources:
     resource: ../../src/bridge.ts
   - title: Feature roadmap stage 5 and the bb host-service request
     resource: ./feature-roadmap.md
+  - title: specs/zcode-unified-distribution.md on upstream main (zcode --web product rules)
+    resource: https://github.com/zai-org/ZCode/blob/main/specs/zcode-unified-distribution.md
+  - title: packages/services/src/node.ts createLocalServices (host-injection points for scheduler wake, browser executor, automation dispatch)
+    resource: https://github.com/zai-org/ZCode/blob/main/packages/services/src/node.ts
+  - title: packages/server/src (entry-http.ts, hostCapability.ts) and packages/services/src/zcode-agent/zcodeAgentService.ts
+    resource: https://github.com/zai-org/ZCode/tree/main/packages/server
 generated:
   by: zcode-agent/GLM-5.3
   at: 2026-10-23T12:15:40Z
 verified:
   - by: zcode-agent/GLM-5.3
     at: 2026-10-23T12:15:40Z
+  - by: zcode-agent/GLM-5.3
+    at: 2026-10-23T13:05:00Z
 ---
 
 # ZCode Desktop host services cannot be proxied by attaching to the running app
@@ -31,9 +39,10 @@ implements the host services the plugin rejects (`automation/*`, `offPeak/*`,
 running Desktop instance and forward the native reverse RPCs to it?
 
 **Conclusion: no.** Desktop exposes no RPC endpoint for external clients, by
-design. The only viable unblock paths remain the bb host-service channel
-([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)) or a documented
-public host API from Z.ai.
+design. Unblock paths: the bb host-service channel
+([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)), a documented
+public host API from Z.ai, or plugin-side assembly of the open
+`packages/services` host implementations - see the amendment section below.
 
 ## Observed topology (Desktop 3.16.2, macOS)
 
@@ -71,13 +80,54 @@ public host API from Z.ai.
   bypassing a signed app's peer validation is a trust-boundary violation of
   the same category the plugin already forbids for credentials.
 
+## The open server surface: `zcode --web` and packages/server (amendment 2026-10-23)
+
+The first version of this document missed that upstream also ships a
+product-grade server surface; recorded here after re-reading the repository
+tree (user-reported gap):
+
+- `zcode --web` (unified distribution, spec
+  `specs/zcode-unified-distribution.md`) starts a local HTTP/WebSocket
+  server (default port 3030/auto, loopback default, `--token` required for
+  non-loopback) with bundled Web assets and its own Agent process over the
+  same `app-server --stdio` lifecycle the plugin uses.
+- The host side of the protocol is **open source** in `packages/services`:
+  `zcodeAgentService.ts` answers `interaction/browserList|Execute`, Off-Peak
+  and automation methods, with reusable `AutomationService`/`AutomationRepo`
+  and `OffPeakTaskService`/`OffPeakTaskRepo` implementations.
+- Assembly is the host's job (`createLocalServices` injection points in
+  `packages/services/src/node.ts`): `browserControlExecutor` is injected by
+  the desktop host ("host→main WebContentsView+CDP; …缺省则 browser 不可用"
+  - absent means browser unavailable); `onOffPeakSchedulerWakeRequested` is
+    a desktop-host parentPort forwarding (the scheduler loop itself lives in
+    the host process - Desktop runs a dedicated `zcode-cron-scheduler`
+    child); `onAutomationManualRunRequested` likewise describes desktop-host
+    dispatch. `packages/server/src/hostCapability.ts` issues single-use
+    30-second capabilities granting a "trusted-host" role - the mechanism by
+    which a Desktop attaches itself to a server, not a public endpoint.
+- Net: the HTTP server product covers sessions, workspaces, topics and
+  storage; the browser executor and the scheduler loop still come from a
+  Desktop-grade host. `zcode --web` without Desktop attached does not give
+  the plugin the missing host services.
+
 ## Consequences
 
+- Attaching to a **running Desktop** remains impossible (sections above);
+  that part of the original decision stands.
+- The original claim that only bb#6008 or a public Z.ai API could unblock
+  host services was **incomplete**. Plugin-side implementation is a real
+  third path now that `packages/services` provides open reference
+  implementations: automation/Off-Peak could be assembled inside the plugin
+  (roadmap stage 6's "persist schedules in plugin storage" option), and
+  browser control remains gated on the self-hosted CDP decision. A fourth,
+  architectural option is running `zcode --web` and attaching as its client
+  (`packages/client`), but that redefines the provider (the server owns
+  sessions and lifecycle) and still lacks browser/scheduler without a
+  Desktop host.
 - The v0.9.1 rejection gate in `src/bridge.ts`
-  (`hostServiceUnavailable`) remains the correct behavior: fail those native
-  ports with an actionable message pointing at ZCode Desktop.
-- Feature roadmap stages 5-7 stay blocked on bb; there is no ZCode-side
-  shortcut that does not violate the host boundary.
+  (`hostServiceUnavailable`) remains correct until one of those paths is
+  deliberately chosen; roadmap stages 5-7 stay blocked on a decision, not
+  merely on bb.
 
 ## Re-verify
 

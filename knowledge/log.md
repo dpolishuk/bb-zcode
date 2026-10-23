@@ -2,6 +2,20 @@
 
 ## 2026-10-23
 
+- **Amended** [ZCode Desktop host boundary](decisions/zcode-desktop-host-boundary.md)
+  after a user-reported gap: the first version missed the open server
+  surface. `zcode --web` (specs/zcode-unified-distribution.md) runs a local
+  HTTP/WS server hosting its own `app-server --stdio` Agent, and the host
+  side of the protocol is open in `packages/services`
+  (`zcodeAgentService` handlers, `AutomationService`/`OffPeakTaskService`).
+  Assembly is host-injected: `browserControlExecutor` and the scheduler
+  wake-up come from a Desktop-grade host, so `zcode --web` without Desktop
+  still lacks browser/scheduler. Corrected the "only bb#6008 or a Z.ai API"
+  claim: plugin-side assembly of the open implementations is a real third
+  path for automation/Off-Peak (browser stays on the stage 5 CDP decision);
+  attaching to `zcode --web` as a client is a fourth, architectural option.
+  [Feature roadmap](decisions/feature-roadmap.md) stage 6 now references the
+  open implementations.
 - **Added** [ZCode Desktop host boundary](decisions/zcode-desktop-host-boundary.md):
   rejected the "attach to the running Desktop over RPC" alternative for
   host-service features. Evidence from the installed Desktop 3.16.2 bundle

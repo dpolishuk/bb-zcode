@@ -104,7 +104,14 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
 
 Choose between mapping native `automation/*`/`offPeak/*` onto bb's own
 automations (inter-plugin RPC) or persisting schedules in plugin storage.
-Full native-scheduler parity is not promised.
+Full native-scheduler parity is not promised. Note (2026-10-23): upstream
+ships open host-side reference implementations in `packages/services`
+(`AutomationService`/`AutomationRepo`, `OffPeakTaskService`/`OffPeakTaskRepo`,
+and the `zcodeAgentService` handlers that answer the reverse RPCs); a
+plugin-side assembly no longer has to invent the service shapes. The
+scheduler loop and browser executor are desktop-host injections
+(`createLocalServices` in `packages/services/src/node.ts`), so browser stays
+on the stage 5 CDP decision.
 
 ## Stage 7 — MCP Apps / Gen UI (experimental)
 
