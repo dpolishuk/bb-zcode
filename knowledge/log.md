@@ -1,5 +1,21 @@
 # Knowledge log
 
+## 2026-10-23
+
+- **Added** [ZCode Desktop host boundary](decisions/zcode-desktop-host-boundary.md):
+  rejected the "attach to the running Desktop over RPC" alternative for
+  host-service features. Evidence from the installed Desktop 3.16.2 bundle
+  and live sockets: host/scheduler processes bind ephemeral loopback ports
+  (`listen(0, "127.0.0.1")`), addresses are handed only to Desktop-launched
+  sessions via launch-scoped handles (`pluginAuthority`/`bundleId`/`pid`),
+  and peers are validated (`MACH_PORT_RENDEZVOUS_PEER_VALIDATION`,
+  `ZCODE_CUA_BROKER_ALLOW_ANY_PEER` exists only as a dev override). The only
+  externally shared surface remains files (`~/.zcode` sign-in,
+  `~/.zcode/cli/config.json` MCP inheritance), which the plugin already
+  consumes. Unblock paths stay [get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)
+  or a documented Z.ai host API; [Feature roadmap](decisions/feature-roadmap.md)
+  stage 5 now links the decision.
+
 ## 2026-10-22
 
 - **Added** Icon provenance in v0.9.8: `icons/README.md` records that both

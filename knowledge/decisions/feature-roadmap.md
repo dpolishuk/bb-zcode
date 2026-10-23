@@ -90,10 +90,15 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
   (2026-10-20). What shipped in v0.9.1: `interaction/browserList|Execute`,
   `automation/*`, `offPeak/*`, `bot/channel/reply` and `mcp/ui*` reverse RPCs
   are rejected uniformly with an actionable message pointing to ZCode
-  Desktop. The remaining design option that does not need bb is a
-  self-hosted CDP browser provider inside the plugin - a security-sensitive
-  decision (browser launch, permissions, lifecycle) that needs explicit
-  maintainer approval before any implementation.
+  Desktop. The alternative of attaching to a running ZCode Desktop host was
+  investigated and rejected on 2026-10-23: Desktop serves no stable external
+  endpoint (ephemeral loopback ports, launch-scoped handles, peer
+  validation); see
+  [ZCode Desktop host boundary](zcode-desktop-host-boundary.md). The
+  remaining design option that does not need bb is a self-hosted CDP browser
+  provider inside the plugin - a security-sensitive decision (browser
+  launch, permissions, lifecycle) that needs explicit maintainer approval
+  before any implementation.
 
 ## Stage 6 — automations and Off-Peak mapping
 
