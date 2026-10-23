@@ -53,6 +53,12 @@ runs schedules itself:
   next occurrence.
 - A thread busy at fire time defers up to ten minutes, then records a
   failed run. Three consecutive failures pause the schedule as `failed`.
+- Schedules are workspace-scoped like the native index: `CronList`,
+  `CronUpdate`, `CronDelete` and the binding check only see the invoking
+  session's workspace; cross-workspace ids read as unknown. The scheduler
+  itself runs every workspace's due tasks.
+- Runs are at-least-once across restarts: a bridge-worker crash between
+  dispatch and run recording can repeat a run after bb restarts.
 - Cron expressions follow the machine's local timezone. Every session can
   hold at most one task, permanently - matching native semantics.
 

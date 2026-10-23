@@ -461,10 +461,15 @@ export function createAutomationService(options?: {
 
   async function update(
     raw: unknown,
+    cwd: string,
   ): Promise<{ automation: AutomationSnapshot }> {
     const input = updateParamsSchema.parse(raw);
     await load();
-    const current = loaded!.find((a) => a.automationId === input.automationId);
+    const current = loaded!.find(
+      (a) => a.automationId === input.automationId && a.workspacePath === cwd,
+    );
+    // Cross-workspace ids read as unknown: the store must not leak other
+    // projects' schedules, matching the native per-workspace index.
     if (!current) throw new ProtocolError("Unknown scheduled task.", -32602);
     const at = now();
     const carrierSwitch =
@@ -524,26 +529,36 @@ export function createAutomationService(options?: {
     return { automation: snapshot(next) };
   }
 
-  async function remove(raw: unknown): Promise<{ deleted: boolean }> {
+  async function remove(
+    raw: unknown,
+    cwd: string,
+  ): Promise<{ deleted: boolean }> {
     const input = z
       .object({ automationId: z.string().min(1) })
       .strict()
       .parse(raw);
     await load();
     const before = loaded!.length;
-    loaded = loaded!.filter((a) => a.automationId !== input.automationId);
+    loaded = loaded!.filter(
+      (a) =>
+        !(a.automationId === input.automationId && a.workspacePath === cwd),
+    );
     runs.delete(input.automationId);
     if (loaded!.length === before) return { deleted: false };
     await persist(loaded);
     return { deleted: true };
   }
 
-  async function list(): Promise<{ automations: AutomationSnapshot[] }> {
+  async function list(
+    cwd: string,
+  ): Promise<{ automations: AutomationSnapshot[] }> {
     await load();
-    return { automations: loaded!.map(snapshot) };
+    return {
+      automations: loaded!.filter((a) => a.workspacePath === cwd).map(snapshot),
+    };
   }
 
-  function checkTaskBinding(raw: unknown): { bound: boolean } {
+  function checkTaskBinding(raw: unknown, cwd: string): { bound: boolean } {
     const input = z
       .object({ targetTaskId: z.string().min(1) })
       .strict()
@@ -554,7 +569,9 @@ export function createAutomationService(options?: {
     if (!loaded)
       throw new ProtocolError("Scheduled task store is not ready.", -32000);
     return {
-      bound: loaded.some((a) => a.targetTaskId === input.targetTaskId),
+      bound: loaded.some(
+        (a) => a.targetTaskId === input.targetTaskId && a.workspacePath === cwd,
+      ),
     };
   }
 
@@ -624,17 +641,31 @@ export function createAutomationService(options?: {
       )
         lifecycleStatus = "completed";
     } else if (!current.recurring || failures >= 3) lifecycleStatus = "failed";
-    const nextRunAt =
-      lifecycleStatus === "active"
-        ? nextOccurrence({ ...current }, at + 1)
-        : undefined;
+    // A schedule that can no longer produce a next occurrence must stop -
+    // recording the run without advancing nextRunAt would redispatch it on
+    // every tick.
+    let nextRunAt: number | undefined;
+    let computeError: string | undefined;
+    if (lifecycleStatus === "active") {
+      try {
+        nextRunAt = nextOccurrence({ ...current }, at + 1);
+      } catch (failure) {
+        computeError =
+          failure instanceof Error ? failure.message : String(failure);
+        lifecycleStatus = "failed";
+      }
+    }
+    const errors = [
+      ...(ok ? [] : [message ?? "Run failed"]),
+      ...(computeError ? [`Invalid schedule: ${computeError}`] : []),
+    ];
     const next: StoredAutomation = {
       ...current,
       lifecycleStatus,
       runCount: current.runCount + 1,
       lastRunAt: at,
       consecutiveFailures: failures,
-      ...(ok ? {} : { lastError: message ?? "Run failed" }),
+      ...(errors.length ? { lastError: errors.join("; ") } : {}),
     };
     if (nextRunAt !== undefined) next.nextRunAt = nextRunAt;
     else delete next.nextRunAt;
@@ -647,11 +678,30 @@ export function createAutomationService(options?: {
     raw: unknown,
     context: AutomationHandlerContext,
   ): Promise<unknown> {
-    if (method === "automation/list") return list();
-    if (method === "automation/delete") return remove(raw);
+    if (method === "automation/list") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return list(context.cwd);
+    }
+    if (method === "automation/delete") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return remove(raw, context.cwd);
+    }
     if (method === "automation/checkTaskBinding") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
       await load();
-      return checkTaskBinding(raw);
+      return checkTaskBinding(raw, context.cwd);
     }
     if (method === "automation/create") {
       if (!context.threadId || !context.providerThreadId || !context.cwd)
@@ -666,15 +716,23 @@ export function createAutomationService(options?: {
         providerOptions: context.providerOptions,
       });
     }
-    if (method === "automation/update") return update(raw);
+    if (method === "automation/update") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return update(raw, context.cwd);
+    }
     throw new ProtocolError(`Unknown automation method ${method}.`, -32601);
   }
 
-  function describe(): string {
+  function describe(cwd?: string): string {
     if (!loaded) return "Scheduled tasks are not loaded yet.";
-    if (!loaded.length)
+    const scoped = cwd ? loaded.filter((a) => a.workspacePath === cwd) : loaded;
+    if (!scoped.length)
       return "No scheduled tasks. Create one in a ZCode session with CronCreate.";
-    return loaded
+    return scoped
       .slice()
       .sort((a, b) => (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity))
       .map((a) => {
@@ -689,8 +747,8 @@ export function createAutomationService(options?: {
       .join("\n\n");
   }
 
-  async function removeById(id: string): Promise<boolean> {
-    return (await remove({ automationId: id })).deleted;
+  async function removeById(id: string, cwd: string): Promise<boolean> {
+    return (await remove({ automationId: id }, cwd)).deleted;
   }
 
   /** Full stored record for the dispatcher (private fields included). */

@@ -310,7 +310,7 @@ it("defers busy dispatches and gives up after ten minutes", async () => {
 
 // ---- Dispatch-level: the bridge runs a due automation through a synthetic peer.
 
-function dispatchHarness(storeDir: string) {
+function dispatchHarness(storeDir: string, holdTurns = false) {
   const cwd = mkdtempSync(join(tmpdir(), "bb-zcode-automation-bridge-"));
   const messages: Record<string, unknown>[] = [];
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -379,20 +379,24 @@ function dispatchHarness(storeDir: string) {
                 payload: {},
               },
             });
-            setTimeout(
-              () =>
-                s.cb?.notification({
-                  method: "session/event",
-                  params: {
-                    sessionId: nativeId,
-                    type: "turn.completed",
-                    eventSeq: 2,
-                    turnId: "turn-1",
-                    payload: { resultType: "success", response: "report done" },
-                  },
-                }),
-              10,
-            );
+            if (!holdTurns)
+              setTimeout(
+                () =>
+                  s.cb?.notification({
+                    method: "session/event",
+                    params: {
+                      sessionId: nativeId,
+                      type: "turn.completed",
+                      eventSeq: 2,
+                      turnId: "turn-1",
+                      payload: {
+                        resultType: "success",
+                        response: "report done",
+                      },
+                    },
+                  }),
+                10,
+              );
             return { accepted: true };
           }
           return {};
@@ -538,6 +542,173 @@ it("answers automation reverse RPCs only when the setting is enabled", async () 
   expect(JSON.stringify(response) + JSON.stringify(messages)).toContain(
     "automations are disabled",
   );
+  await bridge.close();
+  void until;
+});
+
+// ---- Review fixes (2026-10-23): scoping, storm guard, reservations, busy deferral.
+
+const workspaceA = { ...context, cwd: "/workspace-a" };
+const workspaceB = { ...context, cwd: "/workspace-b" };
+
+it("scopes schedules to the creating workspace like the native index", async () => {
+  const s = service(dir);
+  const a = record(
+    await s.handle(
+      "automation/create",
+      { cronExpr: "0 9 * * *", prompt: "project A", targetTaskId: "native-a" },
+      workspaceA,
+    ),
+  ) as { automation: { automationId: string } };
+  await s.handle(
+    "automation/create",
+    { cronExpr: "0 9 * * *", prompt: "project B", targetTaskId: "native-b" },
+    workspaceB,
+  );
+  const listA = record(await s.handle("automation/list", {}, workspaceA)) as {
+    automations: Array<Record<string, unknown>>;
+  };
+  expect(listA.automations).toHaveLength(1);
+  expect(listA.automations[0].prompt).toBe("project A");
+  // Cross-workspace ids read as unknown: no leaking, no mutation.
+  await expect(
+    s.handle(
+      "automation/update",
+      { automationId: a.automation.automationId, title: "hijack" },
+      workspaceB,
+    ),
+  ).rejects.toThrow(/Unknown scheduled task/);
+  // Delete answers boolean false cross-workspace: no leak either way.
+  expect(
+    record(
+      await s.handle(
+        "automation/delete",
+        { automationId: a.automation.automationId },
+        workspaceB,
+      ),
+    ).deleted,
+  ).toBe(false);
+  expect(
+    record(
+      await s.handle(
+        "automation/checkTaskBinding",
+        { targetTaskId: "native-a" },
+        workspaceB,
+      ),
+    ).bound,
+  ).toBe(false);
+  expect(
+    record(
+      await s.handle(
+        "automation/checkTaskBinding",
+        { targetTaskId: "native-a" },
+        workspaceA,
+      ),
+    ).bound,
+  ).toBe(true);
+  expect(s.describe("/workspace-a")).toContain("project A");
+  expect(s.describe("/workspace-a")).not.toContain("project B");
+  // The scoped delete still works from the owning workspace.
+  expect(await s.removeById(a.automation.automationId, "/workspace-a")).toBe(
+    true,
+  );
+});
+
+it("fails a schedule whose next occurrence cannot be computed (storm guard)", async () => {
+  const s = service(dir);
+  const created = record(
+    await s.handle(
+      "automation/create",
+      { cronExpr: "* * * * *", prompt: "tick" },
+      context,
+    ),
+  ) as { automation: { automationId: string } };
+  // Simulate a damaged/legacy entry whose cron no longer parses.
+  const storePath = join(dir, "automations.json");
+  const raw = JSON.parse(readFileSync(storePath, "utf8"));
+  raw.automations[0].cronExpr = "not a cron";
+  writeFileSync(storePath, JSON.stringify(raw));
+  const reopened = service(dir);
+  await reopened.ready();
+  const id = created.automation.automationId;
+  await reopened.completeRun(id, true);
+  const entry = await reopened.find(id);
+  expect(entry?.lifecycleStatus).toBe("failed");
+  expect(entry?.nextRunAt).toBeUndefined();
+  expect(entry?.lastError).toContain("Invalid schedule");
+  expect(reopened.due(new Date(Date.now() + 86_400_000))).toHaveLength(0);
+});
+
+it("retryRun releases a reservation so the next tick can dispatch again", async () => {
+  const s = service(dir);
+  const created = record(
+    await s.handle(
+      "automation/create",
+      { cronExpr: "* * * * *", prompt: "tick" },
+      context,
+    ),
+  ) as { automation: { automationId: string } };
+  const id = created.automation.automationId;
+  const at = new Date("2026-10-23T10:01:00Z");
+  expect(s.beginRun(id, at)).toBe(true);
+  s.retryRun(id);
+  expect(s.beginRun(id, at)).toBe(true);
+});
+
+it("a busy bound thread defers the run instead of recording a failure", async () => {
+  mkdirSync(dir, { recursive: true });
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = dispatchHarness(dir, true);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  writeFileSync(
+    join(dir, "automations.json"),
+    JSON.stringify({
+      version: 1,
+      automations: [
+        {
+          automationId: "automation-busy",
+          title: "Report",
+          cronExpr: "* * * * *",
+          prompt: "Run the report",
+          targetTaskId: "native-1",
+          threadId: "thread",
+          workspacePath: cwd,
+          providerOptions: dispatchOptions.providerOptions,
+          enabled: true,
+          lifecycleStatus: "active",
+          nextRunAt: Date.now() + 1_000,
+          runCount: 0,
+          recurring: true,
+          createdAt: Date.now(),
+        },
+      ],
+    }),
+  );
+  // Open a user turn that never completes; the schedule fires while it runs.
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: dispatchOptions,
+    instructionMode: "replace",
+    input: [{ type: "text", text: "hold this turn", mentions: [] }],
+  });
+  expect(native.has("native-1")).toBe(true);
+  // Give the scheduler several ticks past the due time: a busy session must
+  // defer, not burn failure strikes or start a second turn.
+  await new Promise((r) => setTimeout(r, 1_600));
+  const stored = JSON.parse(
+    readFileSync(join(dir, "automations.json"), "utf8"),
+  );
+  expect(stored.automations[0].runCount).toBe(0);
+  expect(stored.automations[0].lifecycleStatus).toBe("active");
+  expect(stored.automations[0].lastError).toBeUndefined();
+  expect(
+    calls.some(
+      (c) =>
+        c.method === "session/send" &&
+        c.params.automationId === "automation-busy",
+    ),
+  ).toBe(false);
   await bridge.close();
   void until;
 });

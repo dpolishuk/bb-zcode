@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.1 — 2026-10-23
+
+- Review fixes for the v0.10.0 automation host:
+  - A dispatch that races an active turn (or a bb resume that wins the
+    thread) now defers instead of burning one of the three failure strikes;
+    a busy bound thread was already deferred by the pre-check.
+  - Run reservations can no longer freeze a schedule: an unreadable store or
+    a record without a session binding releases the reservation and retries
+    on the next scheduler tick.
+  - A schedule whose next occurrence cannot be computed (damaged or legacy
+    cron in the store) is marked `failed` with an `Invalid schedule` error
+    instead of redispatching on every tick.
+  - Schedules are workspace-scoped like the native per-workspace index:
+    `CronList`, `CronUpdate`, `CronDelete`, the binding check and
+    `/zcode-automations` only see the invoking session's workspace, and
+    cross-workspace ids read as unknown. The scheduler itself still serves
+    every workspace's due tasks.
+- Documented: runs are at-least-once across bridge-worker restarts (a crash
+  between dispatch and run recording can repeat a run after restart).
+
 ## 0.10.0 — 2026-10-23
 
 - Host ZCode's native automations inside the plugin (roadmap stage 6). A new

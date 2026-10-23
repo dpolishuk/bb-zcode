@@ -1,5 +1,23 @@
 # Knowledge log
 
+## 2026-10-23 (v0.10.1 review fixes)
+
+- **Fixed** Four defects found in a full review of the v0.10.0 automation
+  host: (1) a dispatch racing an active turn deferred instead of counting a
+  failure strike (three strikes killed schedules of users who typed at fire
+  time); (2) run reservations could freeze a schedule forever when the store
+  became unreadable or a record lacked its session binding - early-exit
+  paths now release via `retryRun`; (3) `completeRun` computes `nextRunAt`
+  defensively: a schedule whose cron no longer parses is marked `failed`
+  with `Invalid schedule` instead of redispatching every tick; (4) the store
+  is workspace-scoped like the native per-workspace index - list/update/
+  delete/binding-check/`/zcode-automations` see only the invoking session's
+  workspace, cross-workspace ids read as unknown, while the scheduler still
+  serves all workspaces. Also documented: runs are at-least-once across
+  bridge-worker restarts (native records `claimed` before executing; ours
+  records after completion). Regression coverage in
+  tests/automations.test.ts (15 tests).
+
 ## 2026-10-23 (v0.10.0)
 
 - **Added** Plugin-side automation host (roadmap stage 6 done):

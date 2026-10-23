@@ -347,18 +347,20 @@ async function managePlugins(session: Session, argument: string) {
 
 async function manageAutomations(
   service: AutomationService,
+  cwd: string,
   command: string,
   argument: string,
 ) {
-  // Scheduled tasks are store-global; any idle session can inspect them.
-  if (command === "zcode-automations") return service.describe();
+  // Scheduled tasks are workspace-scoped like the native per-workspace
+  // index; the command shows and deletes this session's workspace only.
+  if (command === "zcode-automations") return service.describe(cwd);
   const id = argument.trim();
   if (!id)
     throw new ProtocolError(
       "Usage: /zcode-automation-delete <automation-id>",
       -32000,
     );
-  if (!(await service.removeById(id)))
+  if (!(await service.removeById(id, cwd)))
     throw new ProtocolError(`No scheduled task ${id}.`, -32000);
   return `Deleted scheduled task ${id}.`;
 }
@@ -987,13 +989,17 @@ export function createBridge(
     void automationTick();
   }
 
-  async function manageAutomationsChecked(command: string, argument: string) {
+  async function manageAutomationsChecked(
+    session: Session,
+    command: string,
+    argument: string,
+  ) {
     if (!automations)
       throw new ProtocolError(
         "ZCode automations are disabled. Enable the plugin's automations setting.",
         -32000,
       );
-    return manageAutomations(automations, command, argument);
+    return manageAutomations(automations, session.cwd, command, argument);
   }
 
   async function automationTick(): Promise<void> {
@@ -1054,9 +1060,21 @@ export function createBridge(
 
   async function dispatchAutomation(id: string): Promise<void> {
     if (!automations) return;
-    const entry = await automations.find(id);
+    let entry: Awaited<ReturnType<AutomationService["find"]>>;
+    try {
+      entry = await automations.find(id);
+    } catch {
+      // An unreadable store must not strand the run reservation: retry on
+      // the next tick instead of freezing the schedule until restart.
+      automations.retryRun(id);
+      return;
+    }
     // Deleted while queued: remove() already cleared its run reservation.
-    if (!entry || !entry.targetTaskId) return;
+    // A record without a binding cannot dispatch; release the reservation.
+    if (!entry || !entry.targetTaskId) {
+      automations.retryRun(id);
+      return;
+    }
     const at = new Date();
     const existing = sessions.get(entry.threadId);
     if (
@@ -1111,15 +1129,17 @@ export function createBridge(
       // Turn completion is reported by settle() through the marker above.
     } catch (failure) {
       if (session) session.dispatchingAutomationId = undefined;
+      const message =
+        failure instanceof Error ? failure.message : String(failure);
       if (owned && session)
         await release(session, true, false).catch(() => undefined);
-      await automations
-        .completeRun(
-          id,
-          false,
-          failure instanceof Error ? failure.message : String(failure),
-        )
-        .catch(() => undefined);
+      // A turn that raced the dispatch (or a bb resume that won the thread)
+      // defers instead of burning one of the three failure strikes.
+      if (/ZCode is busy|already has a ZCode session/.test(message)) {
+        automations.deferRun(id, new Date());
+        return;
+      }
+      await automations.completeRun(id, false, message).catch(() => undefined);
     }
   }
 
@@ -1406,7 +1426,11 @@ export function createBridge(
                   ? await managePlugins(session, argument)
                   : command[1] === "zcode-automations" ||
                       command[1] === "zcode-automation-delete"
-                    ? await manageAutomationsChecked(command[1], argument)
+                    ? await manageAutomationsChecked(
+                        session,
+                        command[1],
+                        argument,
+                      )
                     : await session.background.manage(command[1]!, argument);
         if (session.stopping)
           throw new Error("Session stopped while managing tasks.");
