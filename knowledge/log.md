@@ -1,5 +1,24 @@
 # Knowledge log
 
+## 2026-10-24 (v0.11.0, feat/off-peak branch)
+
+- **Added** Idle-time (off-peak) task host, completing roadmap stage 6:
+  `src/offpeak.ts` implements the Z.ai ticket-gateway flow (take/batch
+  status/settle with double auth = desktop JWT + individual Coding Plan key,
+  both already read by `CodingPlanHost`), a workspace-scoped `offpeak.json`
+  store separate from automations (native domain separation), upstream
+  failure classification (3101/3103/session-bound before spending quota),
+  server-directed polling, a settle outbox, and dispatch that passes the
+  hidden idle-plan provider per run through `modelExecution.requestAuth`
+  (no reverse-RPC auth needed - key architectural finding) with
+  `toolDenylist: [CronCreate, OffPeakCreate]` and `offPeakRunType`
+  init/resume including the native continuation prompt on 3102. Setting
+  `offPeakTasksEnabled` gates both the tools (`offPeakToolEnabled` on
+  create/resume) and the host. Contract pinned in
+  [off-peak protocol](contracts/off-peak-protocol.md) (draft: live gateway
+  behavior unverified - fixtures only). 9 focused tests incl. dispatch-level
+  and the 3102 continuation loop.
+
 ## 2026-10-24
 
 - **Verified** Live end-to-end automation run on the installed bb (v0.10.1,

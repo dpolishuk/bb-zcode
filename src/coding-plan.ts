@@ -161,6 +161,24 @@ export class CodingPlanHost implements AccountHost {
     if (this.controller.signal.aborted) throw failure("session closed.");
   }
 
+  /**
+   * Off-peak gateway credentials: the desktop JWT plus the selected
+   * individual Coding Plan API key - exactly the upstream support matrix,
+   * which readLogin already enforces.
+   */
+  async offPeakCredentials(): Promise<
+    | { jwt: string; codingPlanApiKey: string; family: "zai" | "bigmodel" }
+    | undefined
+  > {
+    const login = (await this.readLogin()) ?? this.login;
+    if (!login?.zcodeJwt || !login.token) return undefined;
+    return {
+      jwt: login.zcodeJwt,
+      codingPlanApiKey: login.token,
+      family: login.family,
+    };
+  }
+
   private async request(
     path: string,
     authorization: string,

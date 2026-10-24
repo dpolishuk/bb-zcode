@@ -90,6 +90,13 @@ export default async function plugin(bb: BbPluginApi) {
         "Let ZCode sessions create scheduled tasks (CronCreate) and run them in this bb while it is open. Applies to new sessions.",
       default: false,
     },
+    offPeakTasksEnabled: {
+      type: "boolean",
+      label: "ZCode idle-time tasks",
+      description:
+        "Let ZCode sessions queue idle-time (off-peak) tasks on the Z.ai server and run them when it grants capacity. Requires an individual Coding Plan; runs consume plan quota. Applies to new sessions.",
+      default: false,
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   function register(values: {
@@ -102,6 +109,7 @@ export default async function plugin(bb: BbPluginApi) {
     subagents: string;
     bbToolsEnabled: boolean;
     automationsEnabled: boolean;
+    offPeakTasksEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     const launch = {
@@ -114,6 +122,7 @@ export default async function plugin(bb: BbPluginApi) {
       subagents: values.subagents,
       bbToolsEnabled: values.bbToolsEnabled,
       automationsEnabled: values.automationsEnabled,
+      offPeakTasksEnabled: values.offPeakTasksEnabled,
     };
     registered?.dispose();
     registered = bb.providers.register({

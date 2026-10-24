@@ -345,6 +345,15 @@ export const managementCommands: Array<Record<string, string>> = [
     description: "Delete one ZCode scheduled task by id",
     inputHint: "<automation-id>",
   },
+  {
+    name: "zcode-offpeak",
+    description: "List ZCode idle-time (off-peak) tasks with queue states",
+  },
+  {
+    name: "zcode-offpeak-cancel",
+    description: "Cancel one ZCode idle-time task by id",
+    inputHint: "<task-id>",
+  },
 ];
 export class BackgroundWork {
   private jobs = new Map<

@@ -71,6 +71,16 @@ import {
   type AutomationService,
   type StoredAutomation,
 } from "./automations.js";
+import {
+  OFF_PEAK_METHODS,
+  OFF_PEAK_RUN_TOOL_DENYLIST,
+  OFF_PEAK_CONTINUATION_PROMPT,
+  createOffPeakService,
+  createOffPeakServerClient,
+  type OffPeakServerClient,
+  type OffPeakService,
+  type StoredOffPeakTask,
+} from "./offpeak.js";
 
 type Message = Record<string, unknown>;
 
@@ -81,7 +91,7 @@ function hostServiceUnavailable(method: string): string | undefined {
     method === "interaction/browserExecute"
   )
     return "Browser control";
-  if (method.startsWith("offPeak/")) return "ZCode Off-Peak tasks";
+  if (method.startsWith("offPeak/")) return "ZCode Off-Peak tasks (disabled)";
   if (method === "bot/channel/reply") return "ZCode topic resources";
   if (method.startsWith("mcp/ui")) return "ZCode MCP Apps";
   return undefined;
@@ -120,6 +130,8 @@ type Session = {
   providerOptions?: unknown;
   /** Set while a scheduled-task turn runs; settle() reports it to the store. */
   dispatchingAutomationId?: string;
+  /** Set while an idle-time-task turn runs; settle() reports the outcome. */
+  dispatchingOffPeakId?: string;
   /** True when the dispatcher constructed this session and owns its release. */
   automationOwned?: boolean;
 };
@@ -365,6 +377,21 @@ async function manageAutomations(
   return `Deleted scheduled task ${id}.`;
 }
 
+async function manageOffPeakTasks(
+  service: OffPeakService,
+  cwd: string,
+  command: string,
+  argument: string,
+) {
+  if (command === "zcode-offpeak") return service.describe(cwd);
+  const id = argument.trim();
+  if (!id)
+    throw new ProtocolError("Usage: /zcode-offpeak-cancel <task-id>", -32000);
+  if (!(await service.cancel(id, cwd)))
+    throw new ProtocolError(`No idle-time task ${id}.`, -32000);
+  return `Cancelled idle-time task ${id}.`;
+}
+
 export function createBridge(
   config: {
     write?: (message: Message) => void;
@@ -372,6 +399,8 @@ export function createBridge(
     env?: NodeJS.ProcessEnv;
     accountFactory?: (launch: LaunchSpec) => AccountHost;
     automationTickMs?: number;
+    /** Test seam: replace the off-peak gateway client entirely. */
+    offPeakClientFactory?: () => OffPeakServerClient;
   } = {},
 ) {
   const write =
@@ -412,6 +441,17 @@ export function createBridge(
   let automations: AutomationService | undefined;
   let automationTimer: ReturnType<typeof setInterval> | undefined;
   const dispatching = new Set<string>();
+  // Idle-time tasks: shared housekeeping timer with automations; credentials
+  // come from a dedicated account host bound to the enabling session's launch.
+  let offpeak: OffPeakService | undefined;
+  let offPeakAccount: { close(): void } | undefined;
+  let offPeakCredentials:
+    | (() => Promise<
+        | { jwt: string; codingPlanApiKey: string; family: "zai" | "bigmodel" }
+        | undefined
+      >)
+    | undefined;
+  const offPeakDispatching = new Set<string>();
   const notify = (method: string, params: unknown) =>
     write({ jsonrpc: "2.0", method, params });
   const emit = (session: Session, deltas: ThreadDelta[]) =>
@@ -548,6 +588,26 @@ export function createBridge(
         interactions.delete(id);
         pending.resolve({ decision: "deny" });
       }
+    if (session.dispatchingOffPeakId) {
+      const id = session.dispatchingOffPeakId;
+      session.dispatchingOffPeakId = undefined;
+      // 3102 (ticket expired) requeues for continuation; everything else is
+      // a terminal outcome for the task.
+      const expired = /3102/.test(response ?? "");
+      void offpeak
+        ?.completeRun(
+          id,
+          expired
+            ? "ticketExpired"
+            : status === "completed"
+              ? "completed"
+              : "failed",
+          expired ? "execution window expired" : undefined,
+        )
+        .catch(() => undefined);
+      if (session.automationOwned && !session.stopping && !session.queue.length)
+        void release(session, false, false).catch(() => undefined);
+    }
     if (session.dispatchingAutomationId) {
       const id = session.dispatchingAutomationId;
       session.dispatchingAutomationId = undefined;
@@ -817,6 +877,19 @@ export function createBridge(
         providerOptions: session?.providerOptions,
       });
     }
+    if (OFF_PEAK_METHODS.has(method)) {
+      if (!offpeak)
+        throw new ProtocolError(
+          "ZCode idle-time tasks are disabled. Enable the plugin's idle-time tasks setting, or use ZCode Desktop for this feature.",
+          -32601,
+        );
+      return offpeak.handle(method, raw, {
+        threadId: session?.threadId,
+        providerThreadId: session?.providerThreadId,
+        cwd: session?.cwd,
+        providerOptions: session?.providerOptions,
+      });
+    }
     // These native ports need a host service bb's provider bridge does not
     // expose (verified against SDK 0.6.49: BRIDGE_REQUEST_METHODS has no
     // host-service channel). Reject uniformly with an actionable reason
@@ -980,13 +1053,62 @@ export function createBridge(
     if (automations || closed) return;
     automations = createAutomationService();
     automationTimer = setInterval(
-      () => void automationTick(),
+      () => void housekeepingTick(),
       config.automationTickMs ?? 30_000,
     );
     // The worker's stdio/SIGTERM handlers own its lifetime; the timer must
     // not hold the process open on shutdown.
     automationTimer.unref?.();
-    void automationTick();
+    void housekeepingTick();
+  }
+
+  function ensureOffPeak(launch: LaunchSpec): void {
+    if (offpeak || closed) return;
+    // Test factories may return stub hosts; any host exposing the
+    // off-peak credential accessor can serve the gateway client.
+    const account =
+      config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
+    const host = account as {
+      offPeakCredentials?(): Promise<
+        | { jwt: string; codingPlanApiKey: string; family: "zai" | "bigmodel" }
+        | undefined
+      >;
+      close(): void;
+    };
+    if (typeof host.offPeakCredentials !== "function") return;
+    offPeakAccount = host;
+    offPeakCredentials = () => host.offPeakCredentials!();
+    offpeak = createOffPeakService({
+      client: config.offPeakClientFactory
+        ? config.offPeakClientFactory()
+        : createOffPeakServerClient({
+            resolveOrigin: () => "https://zcode.z.ai",
+            resolveCredentials: async () => {
+              const credentials = await host.offPeakCredentials!();
+              if (!credentials)
+                throw new Error(
+                  "off-peak requires a desktop sign-in with an individual Coding Plan",
+                );
+              return credentials;
+            },
+          }),
+    });
+    if (!automationTimer) {
+      automationTimer = setInterval(
+        () => void housekeepingTick(),
+        config.automationTickMs ?? 30_000,
+      );
+      automationTimer.unref?.();
+    }
+    void housekeepingTick();
+  }
+
+  async function housekeepingTick(): Promise<void> {
+    if (closed) return;
+    await Promise.allSettled([
+      automations ? automationTick() : undefined,
+      offpeak ? offPeakTick() : undefined,
+    ]);
   }
 
   async function manageAutomationsChecked(
@@ -1000,6 +1122,19 @@ export function createBridge(
         -32000,
       );
     return manageAutomations(automations, session.cwd, command, argument);
+  }
+
+  async function manageOffPeakChecked(
+    session: Session,
+    command: string,
+    argument: string,
+  ) {
+    if (!offpeak)
+      throw new ProtocolError(
+        "ZCode idle-time tasks are disabled. Enable the plugin's idle-time tasks setting.",
+        -32000,
+      );
+    return manageOffPeakTasks(offpeak, session.cwd, command, argument);
   }
 
   async function automationTick(): Promise<void> {
@@ -1143,6 +1278,173 @@ export function createBridge(
     }
   }
 
+  async function offPeakTick(): Promise<void> {
+    if (!offpeak || closed) return;
+    await offpeak.ready().catch(() => undefined);
+    await offpeak.syncCycle().catch(() => undefined);
+    if (closed) return;
+    for (const task of offpeak.due(new Date())) {
+      if (offPeakDispatching.size >= 2) break;
+      if (!offpeak.beginRun(task.offPeakTaskId)) continue;
+      offPeakDispatching.add(task.offPeakTaskId);
+      void dispatchOffPeak(task.offPeakTaskId)
+        .catch(() => undefined)
+        .finally(() => offPeakDispatching.delete(task.offPeakTaskId));
+    }
+  }
+
+  async function dispatchOffPeak(id: string): Promise<void> {
+    if (!offpeak) return;
+    let task: StoredOffPeakTask | undefined;
+    try {
+      task = await offpeak.find(id);
+    } catch {
+      return;
+    }
+    if (!task || !task.serverTicketId) return;
+    // Busy bound sessions defer BEFORE any mode write: a rejected send must
+    // never switch the user session's permission mode (native guard).
+    const existing = sessions.get(task.threadId);
+    if (
+      existing &&
+      (existing.timeline ||
+        existing.starting ||
+        existing.stopping ||
+        existing.draining ||
+        existing.background.active)
+    ) {
+      await offpeak.deferRun(id).catch(() => undefined);
+      return;
+    }
+    if (
+      !existing &&
+      (constructing.has(task.threadId) || startingClients.has(task.threadId))
+    )
+      return; // next tick claims it again
+    const credentials = await offPeakCredentials?.();
+    if (!credentials) {
+      await offpeak.completeRun(
+        id,
+        "failed",
+        "off-peak requires a desktop sign-in with an individual Coding Plan",
+      );
+      return;
+    }
+    const idlePlanProviderId = `account:${credentials.family}-offpeak-idle-plan`;
+    if (!task.model) {
+      await offpeak.completeRun(
+        id,
+        "failed",
+        "idle-time task has no model; recreate it with an explicit model",
+      );
+      return;
+    }
+    const shared = {
+      // bb policy vocabulary has no "plan" permissionMode; plan goes through
+      // promptMode like everywhere else in this bridge.
+      ...(task.permissionMode === "plan"
+        ? { promptMode: "plan" as const }
+        : {}),
+      model: `${idlePlanProviderId}/${task.model}`,
+      ...(task.thoughtLevel ? { reasoningLevel: task.thoughtLevel } : {}),
+      ...(task.providerOptions !== undefined
+        ? { providerOptions: task.providerOptions as Record<string, unknown> }
+        : {}),
+    };
+    const options: BridgeExecutionOptions =
+      task.permissionMode === "yolo"
+        ? {
+            permissionMode: "full",
+            permissionScope: "full",
+            approvalReviewer: null,
+            permissionEscalation: null,
+            ...shared,
+          }
+        : {
+            permissionMode: "accept-edits",
+            permissionScope: "workspace",
+            approvalReviewer: "user",
+            permissionEscalation: "ask",
+            ...shared,
+          };
+    let session = existing;
+    let owned = false;
+    try {
+      if (!session) {
+        session = await construct(
+          {
+            threadId: task.threadId,
+            cwd: task.workspacePath,
+            providerThreadId: task.boundSessionId,
+            instructionMode: "replace",
+            options,
+            disallowedTools: [...OFF_PEAK_RUN_TOOL_DENYLIST],
+          },
+          true,
+        );
+        owned = true;
+        session.automationOwned = true;
+        session.providerOptions = task.providerOptions;
+      }
+      session.dispatchingOffPeakId = id;
+      const executionId = `${id}:${task.ranOnce ? "resume" : "init"}:${randomUUID()}`;
+      await send(
+        session,
+        [
+          {
+            type: "text",
+            text: task.ranOnce ? OFF_PEAK_CONTINUATION_PROMPT : task.prompt,
+            mentions: [],
+          },
+        ],
+        options,
+        undefined,
+        undefined,
+        {
+          offPeakTaskId: id,
+          offPeakRunType: task.ranOnce ? "resume" : "init",
+          modelSelection: {
+            providerId: idlePlanProviderId,
+            modelId: task.model,
+            ...(task.thoughtLevel
+              ? { options: { reasoningLevel: task.thoughtLevel } }
+              : {}),
+          },
+          modelExecution: {
+            memoryExtraction: "skip",
+            selectionScope: "execution",
+            offPeak: {
+              executionId,
+              ticketId: task.serverTicketId,
+              providerErrorCode: "3102",
+            },
+            requestAuth: {
+              apiKey: credentials.jwt,
+              headers: {
+                Authorization: `Bearer ${credentials.jwt}`,
+                "X-Coding-Plan-Api-Key": credentials.codingPlanApiKey,
+                "X-Off-Peak-Ticket-ID": task.serverTicketId,
+              },
+            },
+            subagents: { foregroundModel: "submission", background: "allow" },
+          },
+        },
+      );
+      // The outcome is reported by settle() through the marker above.
+    } catch (failure) {
+      if (session) session.dispatchingOffPeakId = undefined;
+      const message =
+        failure instanceof Error ? failure.message : String(failure);
+      if (owned && session)
+        await release(session, true, false).catch(() => undefined);
+      if (/ZCode is busy|already has a ZCode session/.test(message)) {
+        await offpeak.deferRun(id).catch(() => undefined);
+        return;
+      }
+      await offpeak.completeRun(id, "failed", message).catch(() => undefined);
+    }
+  }
+
   async function construct(
     params:
       | z.infer<typeof threadStartParamsSchema>
@@ -1222,6 +1524,7 @@ export function createBridge(
       const accountError = await prepareAccount(account, client);
       const mode = modeFor(params.options);
       if (settings.automationsEnabled) ensureAutomations();
+      if (settings.offPeakTasksEnabled) ensureOffPeak(launch);
       // With automations off the native cron tools stay hidden instead of
       // erroring at call time; with them on, the bridge answers the ports.
       const disallowedTools = [
@@ -1245,6 +1548,8 @@ export function createBridge(
           workspace: workspaceRef(params.cwd),
           ...(mcpServers.length ? { mcpServers } : {}),
           ...(disallowedTools.length ? { toolDenylist: disallowedTools } : {}),
+          // Idle-time tools register only when the host implements the ports.
+          ...(settings.offPeakTasksEnabled ? { offPeakToolEnabled: true } : {}),
         },
       );
       const snapshot = snapshotSchema.parse(response);
@@ -1378,6 +1683,12 @@ export function createBridge(
     options: BridgeExecutionOptions,
     clientRequestId?: string,
     automationId?: string,
+    offPeakExecution?: {
+      modelSelection: Record<string, unknown>;
+      modelExecution: Record<string, unknown>;
+      offPeakTaskId: string;
+      offPeakRunType: "init" | "resume";
+    },
   ) {
     if (
       session.timeline ||
@@ -1395,7 +1706,7 @@ export function createBridge(
       const prompt = material.content;
       const command =
         !material.attachments &&
-        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin|zcode-automations|zcode-automation-delete)(?:\s+(.*))?$/.exec(
+        /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin|zcode-automations|zcode-automation-delete|zcode-offpeak|zcode-offpeak-cancel)(?:\s+(.*))?$/.exec(
           prompt.trim(),
         );
       if (command) {
@@ -1431,7 +1742,14 @@ export function createBridge(
                         command[1],
                         argument,
                       )
-                    : await session.background.manage(command[1]!, argument);
+                    : command[1] === "zcode-offpeak" ||
+                        command[1] === "zcode-offpeak-cancel"
+                      ? await manageOffPeakChecked(
+                          session,
+                          command[1],
+                          argument,
+                        )
+                      : await session.background.manage(command[1]!, argument);
         if (session.stopping)
           throw new Error("Session stopped while managing tasks.");
         if (clientRequestId) session.accepted.add(clientRequestId);
@@ -1500,6 +1818,15 @@ export function createBridge(
                     : {}),
                   ...(modelSelection ? { modelSelection } : {}),
                   ...(automationId ? { automationId } : {}),
+                  ...(offPeakExecution
+                    ? {
+                        toolDenylist: [...OFF_PEAK_RUN_TOOL_DENYLIST],
+                        modelSelection: offPeakExecution.modelSelection,
+                        modelExecution: offPeakExecution.modelExecution,
+                        offPeakTaskId: offPeakExecution.offPeakTaskId,
+                        offPeakRunType: offPeakExecution.offPeakRunType,
+                      }
+                    : {}),
                 }
               : {}),
           },
@@ -2115,6 +2442,7 @@ export function createBridge(
   async function close() {
     closed = true;
     if (automationTimer) clearInterval(automationTimer);
+    offPeakAccount?.close();
     for (const account of accounts.values()) account.close();
     await Promise.allSettled(
       [...sessions.values()].map((session) => release(session, true)),
