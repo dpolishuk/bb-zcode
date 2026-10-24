@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.11.0 — 2026-10-24
+
+- Host ZCode's native idle-time (off-peak) tasks inside the plugin (roadmap
+  stage 6 remainder). A new `offPeakTasksEnabled` setting (off by default)
+  registers the native `OffPeakCreate`/`OffPeakList` tools, and the bridge
+  answers their reverse RPCs against the Z.ai ticket gateway: creation takes
+  a ticket with the upstream failure classification (3101 eligibility, 3103
+  quota, session-bound guard before spending quota), a sync loop batch-polls
+  ticket states with server-directed intervals, and terminal tasks settle
+  through a retrying outbox.
+- Ready tasks run unattended in the creating session: the dispatcher passes
+  the plan's hidden idle-time provider per run together with the ticket and
+  Coding Plan credentials (`modelExecution.requestAuth`), hides
+  `CronCreate`/`OffPeakCreate` for the run, and streams the reply into the
+  same bb thread. A window expiry mid-run (3102) requeues, re-takes a ticket
+  and continues the session with the native continuation prompt; three
+  consecutive failures park the task. Busy threads defer with backoff.
+- Tasks persist workspace-scoped in a separate store (`offpeak.json`),
+  mirroring the native domain separation. `/zcode-offpeak` lists tasks with
+  queue states; `/zcode-offpeak-cancel <id>` cancels one. v1 requires an
+  explicit model at creation. The gateway wire API is undocumented upstream;
+  contracts and risks are pinned in `knowledge/contracts/off-peak-protocol.md`.
+
 ## 0.10.1 — 2026-10-23
 
 - Review fixes for the v0.10.0 automation host:

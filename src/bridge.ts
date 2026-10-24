@@ -77,6 +77,7 @@ import {
   OFF_PEAK_CONTINUATION_PROMPT,
   createOffPeakService,
   createOffPeakServerClient,
+  type OffPeakServerClient,
   type OffPeakService,
   type StoredOffPeakTask,
 } from "./offpeak.js";
@@ -398,6 +399,8 @@ export function createBridge(
     env?: NodeJS.ProcessEnv;
     accountFactory?: (launch: LaunchSpec) => AccountHost;
     automationTickMs?: number;
+    /** Test seam: replace the off-peak gateway client entirely. */
+    offPeakClientFactory?: () => OffPeakServerClient;
   } = {},
 ) {
   const write =
@@ -441,8 +444,13 @@ export function createBridge(
   // Idle-time tasks: shared housekeeping timer with automations; credentials
   // come from a dedicated account host bound to the enabling session's launch.
   let offpeak: OffPeakService | undefined;
-  let offPeakAccount:
-    { offPeakCredentials(): Promise<unknown>; close(): void } | undefined;
+  let offPeakAccount: { close(): void } | undefined;
+  let offPeakCredentials:
+    | (() => Promise<
+        | { jwt: string; codingPlanApiKey: string; family: "zai" | "bigmodel" }
+        | undefined
+      >)
+    | undefined;
   const offPeakDispatching = new Set<string>();
   const notify = (method: string, params: unknown) =>
     write({ jsonrpc: "2.0", method, params });
@@ -1056,26 +1064,34 @@ export function createBridge(
 
   function ensureOffPeak(launch: LaunchSpec): void {
     if (offpeak || closed) return;
-    // Test factories may return stub hosts; only real CodingPlanHosts expose
-    // off-peak credentials.
+    // Test factories may return stub hosts; any host exposing the
+    // off-peak credential accessor can serve the gateway client.
     const account =
       config.accountFactory?.(launch) ?? new CodingPlanHost(launch);
-    const credentialsHost =
-      account instanceof CodingPlanHost ? account : undefined;
-    offPeakAccount = credentialsHost;
-    if (!credentialsHost) return;
+    const host = account as {
+      offPeakCredentials?(): Promise<
+        | { jwt: string; codingPlanApiKey: string; family: "zai" | "bigmodel" }
+        | undefined
+      >;
+      close(): void;
+    };
+    if (typeof host.offPeakCredentials !== "function") return;
+    offPeakAccount = host;
+    offPeakCredentials = () => host.offPeakCredentials!();
     offpeak = createOffPeakService({
-      client: createOffPeakServerClient({
-        resolveOrigin: () => "https://zcode.z.ai",
-        resolveCredentials: async () => {
-          const credentials = await credentialsHost.offPeakCredentials();
-          if (!credentials)
-            throw new Error(
-              "off-peak requires a desktop sign-in with an individual Coding Plan",
-            );
-          return credentials;
-        },
-      }),
+      client: config.offPeakClientFactory
+        ? config.offPeakClientFactory()
+        : createOffPeakServerClient({
+            resolveOrigin: () => "https://zcode.z.ai",
+            resolveCredentials: async () => {
+              const credentials = await host.offPeakCredentials!();
+              if (!credentials)
+                throw new Error(
+                  "off-peak requires a desktop sign-in with an individual Coding Plan",
+                );
+              return credentials;
+            },
+          }),
     });
     if (!automationTimer) {
       automationTimer = setInterval(
@@ -1305,9 +1321,7 @@ export function createBridge(
       (constructing.has(task.threadId) || startingClients.has(task.threadId))
     )
       return; // next tick claims it again
-    const credentials = await (
-      offPeakAccount as CodingPlanHost | undefined
-    )?.offPeakCredentials();
+    const credentials = await offPeakCredentials?.();
     if (!credentials) {
       await offpeak.completeRun(
         id,
