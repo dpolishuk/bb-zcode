@@ -1,8 +1,34 @@
 # Validation record
 
-Verified locally on 2026-10-17 through 2026-10-22, macOS. The checks below cover the source
+Verified locally on 2026-10-17 through 2026-10-24, macOS. The checks below cover the source
 checkout, an isolated real-CLI smoke, and installation from the published
 marketplace. Model connectivity remains a separate verification boundary.
+
+## Automations: live end-to-end scheduled run (2026-10-24)
+
+On the user's installed bb (plugin v0.10.1 from the marketplace Git source),
+`automationsEnabled` was turned on and a one-shot schedule (`maxRuns: 1`,
+cron every minute, bound to an existing thread's native session) was seeded
+into `~/.bb/plugins/zcode/bridge-data/automations.json`. Observed cycle:
+
+- The scheduler started with the next session construction (the setting
+  applies to new sessions, as documented) and detected the due task.
+- A busy foreground turn deferred the run; after it settled, the dispatcher
+  sent the prompt with the native `automationId` marker and the scheduled
+  turn streamed into the bound thread (visible reply in that thread).
+- The dispatched turn was a **real model request through the active
+  individual Coding Plan** - the first non-synthetic inference verified
+  through the plugin (one short turn; general paid-inference behavior
+  remains a separate boundary).
+- After settle, the store recorded `runCount: 1`, `lifecycleStatus:
+completed`, `nextRunAt` cleared, no `lastError` - exactly the `maxRuns: 1`
+  lifecycle. The verification entry was then removed from the store.
+
+Scope: scheduler start, busy deferral, dispatch, marker semantics, run
+accounting and lifecycle transitions. Not covered live: tool-driven creation
+(`CronCreate` from a model turn - the creating session predated the setting),
+update/delete round-trips, the 20-task limit and workspace scoping (covered
+by automated tests instead).
 
 ## PR #1: context windows and budget variants (2026-10-22)
 

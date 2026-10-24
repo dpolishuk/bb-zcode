@@ -1,5 +1,18 @@
 # Knowledge log
 
+## 2026-10-24
+
+- **Verified** Live end-to-end automation run on the installed bb (v0.10.1,
+  real individual Coding Plan inference): scheduler start on the first
+  post-setting session construct, busy-turn deferral, dispatch with the
+  native `automationId` marker into the bound thread, and `maxRuns: 1`
+  lifecycle (`runCount: 1` → `completed`, `nextRunAt` cleared). First
+  non-synthetic model request verified through the plugin. Tool-driven
+  `CronCreate` from a model turn remains unverified live (the creating
+  session predated the setting); store CRUD, the limit and workspace
+  scoping carry automated coverage. Recorded in
+  [validation](../docs/validation.md).
+
 ## 2026-10-23 (v0.10.1 review fixes)
 
 - **Fixed** Four defects found in a full review of the v0.10.0 automation
