@@ -51,6 +51,7 @@ export function runtimeSettings(raw: unknown) {
   const subagents = parseSubagents(p.subagents);
   return {
     automationsEnabled: p.automationsEnabled === true,
+    offPeakTasksEnabled: p.offPeakTasksEnabled === true,
     bbToolsEnabled: p.bbToolsEnabled === true,
     preferences: {
       ...RUNTIME_PREFERENCES,
