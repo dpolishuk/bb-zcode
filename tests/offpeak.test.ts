@@ -335,7 +335,11 @@ it("claims only ready queued tasks in FIFO order", async () => {
 
 // ---- Dispatch-level: the bridge runs a ready task through a synthetic peer.
 
-function offPeakHarness(storeDir: string, completedResponse = "done") {
+function offPeakHarness(
+  storeDir: string,
+  completedResponse = "done",
+  credentialsMode: "ok" | "throw" = "ok",
+) {
   const cwd = mkdtempSync(join(tmpdir(), "bb-zcode-offpeak-bridge-"));
   const messages: Record<string, unknown>[] = [];
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -347,6 +351,8 @@ function offPeakHarness(storeDir: string, completedResponse = "done") {
     },
     close() {},
     async offPeakCredentials() {
+      if (credentialsMode === "throw")
+        throw new Error("cannot decrypt desktop sign-in");
       return {
         jwt: "bridge-jwt",
         codingPlanApiKey: "bridge-key",
@@ -607,7 +613,18 @@ it("recovers an interrupted running task as a queued continuation", async () => 
   const id = created.task.offPeakTaskId;
   await s.beginRun(id);
   await s.markRunning(id);
-  // Simulate a worker crash: a fresh service loads the same store.
+  // Crash BEFORE the native side accepted the prompt: the retry must use
+  // the original prompt, so ranOnce stays false.
+  const preAdmission = createOffPeakService({
+    storeDir: dir,
+    client: fakeClient(),
+  });
+  await preAdmission.ready();
+  expect((await preAdmission.find(id))?.ranOnce ?? false).toBe(false);
+  // Crash AFTER acceptance: the retry continues the session instead.
+  await preAdmission.beginRun(id);
+  await preAdmission.markRunning(id);
+  await preAdmission.markAdmitted(id);
   const reopened = createOffPeakService({
     storeDir: dir,
     client: fakeClient(),
@@ -700,5 +717,70 @@ it("completes a task whose successful reply merely mentions 3102", async () => {
         c.method === "session/send" && c.params.offPeakTaskId !== undefined,
     ),
   ).toHaveLength(1);
+  await bridge.close();
+});
+
+it("busy deferrals back off from 30s and never burn failure strikes", async () => {
+  const fixed = new Date("2026-10-24T12:00:00Z");
+  const s = createOffPeakService({
+    storeDir: dir,
+    client: fakeClient(),
+    now: () => fixed,
+  });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  await s.deferRun(id);
+  let task = await s.find(id);
+  expect(task?.nextDispatchAt).toBe(fixed.getTime() + 30_000);
+  await s.deferRun(id);
+  task = await s.find(id);
+  expect(task?.nextDispatchAt).toBe(fixed.getTime() + 60_000);
+  // Two deferrals plus two run failures stay short of the three-strike
+  // limit; only the third real failure fails the task.
+  await s.completeRun(id, "failed", "boom");
+  await s.completeRun(id, "failed", "boom");
+  task = await s.find(id);
+  expect(task?.status).toBe("queued");
+  await s.completeRun(id, "failed", "boom");
+  task = await s.find(id);
+  expect(task?.status).toBe("failed");
+});
+
+it("fails a task when reading credentials throws instead of stranding the claim", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir, "done", "throw");
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "failed");
+  expect(String(readStore().tasks[0].failureReason)).toContain(
+    "credentials unavailable",
+  );
+  // No prompt ever left and the claim was released, not stranded.
+  expect(
+    calls.some((c) => c.method === "session/send" && c.params.offPeakTaskId),
+  ).toBe(false);
   await bridge.close();
 });

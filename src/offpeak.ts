@@ -100,6 +100,7 @@ const storedFieldsSchema = z.object({
   nextPollAt: z.number().int().optional(),
   nextDispatchAt: z.number().int().optional(),
   ranOnce: z.boolean().optional(),
+  deferred: z.number().int().nonnegative().optional(),
   transientFailures: z.number().int().nonnegative().optional(),
   settled: z.boolean().optional(),
   failureReason: z.string().optional(),
@@ -663,28 +664,43 @@ export function createOffPeakService(options: {
   }
 
   /**
-   * Persist dispatch progress before the prompt leaves: a worker crash after
-   * this point leaves a `running` row that load() recovers as a queued
-   * continuation (ranOnce stays true), never a fresh `init` re-run.
+   * Persist dispatch progress before the prompt leaves. `ranOnce` is NOT
+   * set here: a send that never gets accepted must retry with the original
+   * prompt, not the continuation. A worker crash after this point recovers
+   * as a queued fresh run (prompt never left).
    */
   async function markRunning(id: string): Promise<void> {
     await mutate(id, (t) => ({
       ...t,
       status: "running",
-      ranOnce: true,
       startedAt: t.startedAt ?? now().getTime(),
     })).catch(() => undefined);
   }
 
-  /** Busy bound session: retry with 30s..15min backoff (native transient). */
+  /**
+   * The native side accepted the prompt: from here a crash recovers as a
+   * queued continuation (ranOnce stays true), never a fresh re-run.
+   */
+  async function markAdmitted(id: string): Promise<void> {
+    await mutate(id, (t) => ({ ...t, ranOnce: true })).catch(() => undefined);
+  }
+
+  /**
+   * Busy bound session: retry with 30s..15min backoff (native transient).
+   * Deferrals keep their own counter - they must not burn the three
+   * failure strikes reserved for real run failures.
+   */
   async function deferRun(id: string): Promise<void> {
     dispatching.delete(id);
-    const failures = ((await find(id))?.transientFailures ?? 0) + 1;
-    const backoff = Math.min(30_000 * 2 ** Math.min(failures, 6), 15 * 60_000);
+    const deferred = ((await find(id))?.deferred ?? 0) + 1;
+    const backoff = Math.min(
+      30_000 * 2 ** Math.min(deferred - 1, 5),
+      15 * 60_000,
+    );
     await mutate(id, (t) => ({
       ...t,
       status: "queued",
-      transientFailures: failures,
+      deferred,
       nextDispatchAt: now().getTime() + backoff,
     })).catch(() => undefined);
   }
@@ -692,11 +708,14 @@ export function createOffPeakService(options: {
   /**
    * Record a finished run. `ticketExpired` requeues for continuation (3102);
    * three consecutive transient dispatch failures also fail the task.
+   * `permanent` fails immediately: missing credentials/plan/model must
+   * never park as "waiting for idle capacity" (upstream spec).
    */
   async function completeRun(
     id: string,
     outcome: "completed" | "failed" | "ticketExpired",
     message?: string,
+    options?: { permanent?: boolean },
   ): Promise<void> {
     dispatching.delete(id);
     const current = await find(id);
@@ -710,6 +729,7 @@ export function createOffPeakService(options: {
         startedAt: t.startedAt ?? at,
         endedAt: at,
         transientFailures: 0,
+        deferred: 0,
       }));
       return;
     }
@@ -721,6 +741,7 @@ export function createOffPeakService(options: {
         ranOnce: true,
         schedulable: false,
         startedAt: t.startedAt ?? at,
+        deferred: 0,
         ...(message ? { failureReason: message } : {}),
       }));
       const fresh = await find(id);
@@ -728,7 +749,7 @@ export function createOffPeakService(options: {
       return;
     }
     const failures = (current.transientFailures ?? 0) + 1;
-    if (failures >= 3)
+    if (failures >= 3 || options?.permanent)
       await mutate(id, (t) => ({
         ...t,
         status: "failed",
@@ -800,6 +821,7 @@ export function createOffPeakService(options: {
     deferRun,
     retryRun,
     markRunning,
+    markAdmitted,
     completeRun,
     cancel,
     find,

@@ -1337,12 +1337,33 @@ export function createBridge(
       offPeakDispatching.delete(id);
       return; // next tick claims it again
     }
-    const credentials = await offPeakCredentials?.();
+    let credentials: Awaited<
+      ReturnType<NonNullable<typeof offPeakCredentials>>
+    >;
+    try {
+      credentials = (await offPeakCredentials?.())!;
+    } catch (failure) {
+      // A throwing credential read (e.g. sign-in decrypt failure) must not
+      // strand the claim; treat it as a permanent dispatch failure.
+      await offpeak
+        .completeRun(
+          id,
+          "failed",
+          `off-peak credentials unavailable: ${
+            failure instanceof Error ? failure.message : String(failure)
+          }`,
+          { permanent: true },
+        )
+        .catch(() => undefined);
+      offPeakDispatching.delete(id);
+      return;
+    }
     if (!credentials) {
       await offpeak.completeRun(
         id,
         "failed",
         "off-peak requires a desktop sign-in with an individual Coding Plan",
+        { permanent: true },
       );
       offPeakDispatching.delete(id);
       return;
@@ -1353,6 +1374,7 @@ export function createBridge(
         id,
         "failed",
         "idle-time task has no model; recreate it with an explicit model",
+        { permanent: true },
       );
       offPeakDispatching.delete(id);
       return;
@@ -1451,7 +1473,10 @@ export function createBridge(
           },
         },
       );
-      // The outcome is reported by settle() through the marker above.
+      // The native side accepted the prompt: only now does a crash recover
+      // as a continuation. The outcome is reported by settle() through the
+      // marker above.
+      await offpeak.markAdmitted(id).catch(() => undefined);
     } catch (failure) {
       if (session) session.dispatchingOffPeakId = undefined;
       const message =
