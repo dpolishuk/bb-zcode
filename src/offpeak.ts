@@ -696,21 +696,26 @@ export function createOffPeakService(options: {
    * prompt, not the continuation. A worker crash after this point recovers
    * as a queued fresh run (prompt never left). Returns false when the task
    * is missing or terminal (cancelled while dispatch waited) or the durable
-   * write failed - the dispatcher must not send in those cases.
+   * write failed - the dispatcher must not send in those cases, and a
+   * failed write rolls the in-memory state back so housekeeping and the
+   * next claim see the task as it was.
    */
   async function markRunning(id: string): Promise<boolean> {
+    const before = await find(id);
+    if (!before || TERMINAL_STATUSES.has(before.status)) return false;
+    const at = now().getTime();
+    const next: StoredOffPeakTask = {
+      ...before,
+      status: "running",
+      startedAt: before.startedAt ?? at,
+      updatedAt: at,
+    };
+    loaded = loaded!.map((t) => (t.offPeakTaskId === id ? next : t));
     try {
-      const next = await mutate(id, (t) =>
-        TERMINAL_STATUSES.has(t.status)
-          ? t
-          : {
-              ...t,
-              status: "running",
-              startedAt: t.startedAt ?? now().getTime(),
-            },
-      );
-      return next !== undefined && next.status === "running";
+      await persist(loaded);
+      return true;
     } catch {
+      loaded = loaded!.map((t) => (t.offPeakTaskId === id ? before : t));
       return false;
     }
   }
@@ -720,15 +725,23 @@ export function createOffPeakService(options: {
    * queued continuation (ranOnce stays true), never a fresh re-run.
    * Returns false when the durable admission record could not be written
    * or the task is terminal - the caller treats that as a failed run so a
-   * restart cannot silently replay an accepted task.
+   * restart cannot silently replay an accepted task. A failed write rolls
+   * back, so the task stays exactly as it was before admission.
    */
   async function markAdmitted(id: string): Promise<boolean> {
+    const before = await find(id);
+    if (!before || TERMINAL_STATUSES.has(before.status)) return false;
+    const next: StoredOffPeakTask = {
+      ...before,
+      ranOnce: true,
+      updatedAt: now().getTime(),
+    };
+    loaded = loaded!.map((t) => (t.offPeakTaskId === id ? next : t));
     try {
-      const next = await mutate(id, (t) =>
-        TERMINAL_STATUSES.has(t.status) ? t : { ...t, ranOnce: true },
-      );
-      return next !== undefined && next.ranOnce === true;
+      await persist(loaded);
+      return true;
     } catch {
+      loaded = loaded!.map((t) => (t.offPeakTaskId === id ? before : t));
       return false;
     }
   }

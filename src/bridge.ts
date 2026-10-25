@@ -1431,6 +1431,10 @@ export function createBridge(
       // failed, must not receive the prompt at all.
       const running = await offpeak.markRunning(id);
       if (!running) {
+        // Cancelled while dispatch waited, or the durable write failed and
+        // the service rolled back: release the service claim, the child and
+        // the slot, and let the next tick decide.
+        offpeak.retryRun(id);
         if (owned && session)
           await release(session, true, false).catch(() => undefined);
         offPeakDispatching.delete(id);

@@ -862,3 +862,29 @@ it("a creation whose persistence fails never becomes dispatchable", async () => 
   };
   expect(listed.tasks).toHaveLength(0);
 });
+
+it("rolls the in-memory state back when a marker write fails", async () => {
+  const dir2 = mkdtempSync(join(tmpdir(), "bb-zcode-offpeak-marker-"));
+  const s = createOffPeakService({ storeDir: dir2, client: fakeClient() });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  // Break persistence like the rejected-creation test, then attempt both
+  // markers: each returns false and leaves the task exactly as it was.
+  const { rmSync, mkdirSync } = await import("node:fs");
+  rmSync(join(dir2, "offpeak.json"));
+  mkdirSync(join(dir2, "offpeak.json"));
+  expect(await s.markRunning(id)).toBe(false);
+  let task = await s.find(id);
+  expect(task?.status).toBe("queued"); // not stranded as in-memory running
+  expect(await s.markAdmitted(id)).toBe(false);
+  task = await s.find(id);
+  expect(task?.ranOnce ?? false).toBe(false);
+  // The claim can be taken again after the bridge's retryRun release.
+  expect(s.beginRun(id)).toBe(true);
+});
