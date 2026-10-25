@@ -584,19 +584,38 @@ export function createOffPeakService(options: {
       (t) => t.nextPollAt === undefined || t.nextPollAt <= now().getTime(),
     );
     if (!due.length) return;
-    let result;
-    try {
-      result = await client.batchStatus(due.map((t) => t.serverTicketId!));
-    } catch {
-      // Transient gateway failure: retry on the next tick with backoff.
-      const backoff = now().getTime() + 30_000;
-      await Promise.allSettled(
-        due.map((t) =>
-          mutate(t.offPeakTaskId, (task) => ({ ...task, nextPollAt: backoff })),
-        ),
-      );
-      return;
+    // The gateway caps ticket_ids at 100 per batch request; poll in chunks.
+    const results: Awaited<ReturnType<OffPeakServerClient["batchStatus"]>>[] =
+      [];
+    for (let i = 0; i < due.length; i += 100) {
+      const chunk = due.slice(i, i + 100);
+      try {
+        results.push(
+          await client.batchStatus(chunk.map((t) => t.serverTicketId!)),
+        );
+      } catch {
+        // Transient gateway failure: retry this chunk on the next tick.
+        const backoff = now().getTime() + 30_000;
+        await Promise.allSettled(
+          chunk.map((t) =>
+            mutate(t.offPeakTaskId, (task) => ({
+              ...task,
+              nextPollAt: backoff,
+            })),
+          ),
+        );
+      }
     }
+    if (!results.length) return;
+    for (const result of results) {
+      await applyTicketStatuses(result, due);
+    }
+  }
+
+  async function applyTicketStatuses(
+    result: Awaited<ReturnType<OffPeakServerClient["batchStatus"]>>,
+    due: StoredOffPeakTask[],
+  ): Promise<void> {
     const byTicket = new Map(result.tickets.map((t) => [t.ticketId, t]));
     for (const task of due) {
       const ticket = byTicket.get(task.serverTicketId!);
@@ -715,7 +734,16 @@ export function createOffPeakService(options: {
       await persist(loaded);
       return true;
     } catch {
-      loaded = loaded!.map((t) => (t.offPeakTaskId === id ? before : t));
+      // Restore only the marker fields, and only while this task is still
+      // the object we wrote: a concurrent cancel() replaces the entry, and
+      // restoring the whole `before` snapshot would resurrect it.
+      loaded = loaded!.map((t) =>
+        t.offPeakTaskId === id &&
+        t.status === "running" &&
+        !TERMINAL_STATUSES.has(t.status)
+          ? { ...t, status: before.status, startedAt: before.startedAt }
+          : t,
+      );
       return false;
     }
   }
@@ -726,7 +754,7 @@ export function createOffPeakService(options: {
    * Returns false when the durable admission record could not be written
    * or the task is terminal - the caller treats that as a failed run so a
    * restart cannot silently replay an accepted task. A failed write rolls
-   * back, so the task stays exactly as it was before admission.
+   * back only the admission field, leaving any concurrent mutation intact.
    */
   async function markAdmitted(id: string): Promise<boolean> {
     const before = await find(id);
@@ -741,7 +769,13 @@ export function createOffPeakService(options: {
       await persist(loaded);
       return true;
     } catch {
-      loaded = loaded!.map((t) => (t.offPeakTaskId === id ? before : t));
+      loaded = loaded!.map((t) =>
+        t.offPeakTaskId === id &&
+        t.ranOnce === true &&
+        !TERMINAL_STATUSES.has(t.status)
+          ? { ...t, ranOnce: before.ranOnce }
+          : t,
+      );
       return false;
     }
   }

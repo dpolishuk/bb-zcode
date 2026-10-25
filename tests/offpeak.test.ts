@@ -888,3 +888,40 @@ it("rolls the in-memory state back when a marker write fails", async () => {
   // The claim can be taken again after the bridge's retryRun release.
   expect(s.beginRun(id)).toBe(true);
 });
+
+it("polls ticket status in gateway-sized batches and preserves concurrent cancels on rollback", async () => {
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir, client });
+  // 110 active tickets: the gateway caps batches at 100 ticket_ids.
+  for (let i = 0; i < 110; i += 1)
+    await s.handle(
+      "offPeak/create",
+      { title: `t${i}`, prompt: "p", model: "m" },
+      { ...context, providerThreadId: `native-${i}`, cwd: `/ws-${i % 2}` },
+    );
+  await s.syncCycle();
+  expect(client.statuses).toHaveLength(2);
+  expect(client.statuses[0]).toHaveLength(100);
+  expect(client.statuses[1]).toHaveLength(10);
+  // Rollback vs concurrent cancel: break persistence, cancel a task (its
+  // own write also fails, leaving cancelled in memory), then a late
+  // markRunning must not resurrect it through the rollback path.
+  const { rmSync, mkdirSync } = await import("node:fs");
+  rmSync(join(dir, "offpeak.json"));
+  mkdirSync(join(dir, "offpeak.json"));
+  const cancelled = await s.find(
+    (
+      record(
+        await s.handle("offPeak/list", {}, { ...context, cwd: "/ws-0" }),
+      ) as {
+        tasks: Array<{ offPeakTaskId: string }>;
+      }
+    ).tasks[0].offPeakTaskId,
+  );
+  expect(cancelled).toBeDefined();
+  // cancel's own durable write fails too (broken store); it still leaves
+  // the task cancelled in memory and rejects - swallow that here.
+  await s.cancel(cancelled!.offPeakTaskId, "/ws-0").catch(() => undefined);
+  expect(await s.markRunning(cancelled!.offPeakTaskId)).toBe(false);
+  expect((await s.find(cancelled!.offPeakTaskId))?.status).toBe("cancelled");
+});

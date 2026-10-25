@@ -1492,7 +1492,14 @@ export function createBridge(
       if (!admitted && (await offpeak.find(id))?.status !== "cancelled") {
         if (session) session.dispatchingOffPeakId = undefined;
         await offpeak
-          .completeRun(id, "failed", "admission record could not be persisted")
+          .completeRun(
+            id,
+            "failed",
+            "admission record could not be persisted",
+            {
+              permanent: true,
+            },
+          )
           .catch(() => undefined);
         if (owned && session)
           await release(session, true, false).catch(() => undefined);
