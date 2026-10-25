@@ -354,7 +354,19 @@ export function createOffPeakService(options: {
         throw failure;
       }
       // Fail closed on a damaged store (same rationale as automations).
-      loaded = storeFileSchema.parse(JSON.parse(raw)).tasks;
+      const tasks = storeFileSchema.parse(JSON.parse(raw)).tasks;
+      // Interrupted-run recovery, like the native host: a `running` row
+      // means the worker died mid-run - requeue it and keep ranOnce so the
+      // next dispatch continues the session instead of repeating the
+      // original prompt and burning quota again.
+      const recovered = tasks.map((task) =>
+        task.status === "running"
+          ? { ...task, status: "queued" as const, schedulable: false }
+          : task,
+      );
+      loaded = recovered;
+      if (recovered.some((task, index) => task !== tasks[index]))
+        void persist(recovered).catch(() => undefined);
     })();
     return loading;
   }
@@ -582,7 +594,8 @@ export function createOffPeakService(options: {
             : {}),
           ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
         }));
-      } else if (ticket.state === "expired") {
+      } else if (ticket.state === "expired" || ticket.state === "not_found") {
+        // Explicitly vanished tickets re-enter the queue like expired ones.
         await retake(task, nextPoll);
       } else {
         await mutate(task.offPeakTaskId, (t) => ({
@@ -644,6 +657,25 @@ export function createOffPeakService(options: {
     return true;
   }
 
+  /** Release a claim without any backoff (retry on the next tick). */
+  function retryRun(id: string): void {
+    dispatching.delete(id);
+  }
+
+  /**
+   * Persist dispatch progress before the prompt leaves: a worker crash after
+   * this point leaves a `running` row that load() recovers as a queued
+   * continuation (ranOnce stays true), never a fresh `init` re-run.
+   */
+  async function markRunning(id: string): Promise<void> {
+    await mutate(id, (t) => ({
+      ...t,
+      status: "running",
+      ranOnce: true,
+      startedAt: t.startedAt ?? now().getTime(),
+    })).catch(() => undefined);
+  }
+
   /** Busy bound session: retry with 30s..15min backoff (native transient). */
   async function deferRun(id: string): Promise<void> {
     dispatching.delete(id);
@@ -651,6 +683,7 @@ export function createOffPeakService(options: {
     const backoff = Math.min(30_000 * 2 ** Math.min(failures, 6), 15 * 60_000);
     await mutate(id, (t) => ({
       ...t,
+      status: "queued",
       transientFailures: failures,
       nextDispatchAt: now().getTime() + backoff,
     })).catch(() => undefined);
@@ -765,6 +798,8 @@ export function createOffPeakService(options: {
     due,
     beginRun,
     deferRun,
+    retryRun,
+    markRunning,
     completeRun,
     cancel,
     find,

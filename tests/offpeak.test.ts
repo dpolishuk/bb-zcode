@@ -335,7 +335,7 @@ it("claims only ready queued tasks in FIFO order", async () => {
 
 // ---- Dispatch-level: the bridge runs a ready task through a synthetic peer.
 
-function offPeakHarness(storeDir: string) {
+function offPeakHarness(storeDir: string, completedResponse = "done") {
   const cwd = mkdtempSync(join(tmpdir(), "bb-zcode-offpeak-bridge-"));
   const messages: Record<string, unknown>[] = [];
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -427,7 +427,10 @@ function offPeakHarness(storeDir: string) {
                     type: "turn.completed",
                     eventSeq: turnSerial + 100,
                     turnId: turn,
-                    payload: { resultType: "success", response: "done" },
+                    payload: {
+                      resultType: "success",
+                      response: completedResponse,
+                    },
                   },
                 }),
               10,
@@ -530,10 +533,14 @@ it("dispatches a ready idle-time task with the idle-plan execution block", async
     record(record(execution.requestAuth).headers)["X-Off-Peak-Ticket-ID"],
   ).toBe("ticket-1");
   expect(record(execution.requestAuth).apiKey).toBe("bridge-jwt");
-  // The turn settles, the task completes and its ticket settles.
-  await until(() => native.get("native-1")!.closed === true);
-  const stored = JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8"));
-  expect(stored.tasks[0].status).toBe("completed");
+  // The turn settles and the task completes; completeRun runs concurrently
+  // with the child release, so wait for the persisted status itself.
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  expect(readStore().tasks[0].ranOnce).toBe(true);
   await bridge.close();
 });
 
@@ -582,5 +589,116 @@ it("continues a task after a 3102 window expiry with the resume prompt", async (
     (c) => c.method === "session/send" && c.params.offPeakRunType === "resume",
   )!;
   expect(resume.params.content).toContain("Continue the previous task");
+  await bridge.close();
+});
+
+// ---- Review-fix regressions (2026-10-24).
+
+it("recovers an interrupted running task as a queued continuation", async () => {
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  await s.beginRun(id);
+  await s.markRunning(id);
+  // Simulate a worker crash: a fresh service loads the same store.
+  const reopened = createOffPeakService({
+    storeDir: dir,
+    client: fakeClient(),
+  });
+  await reopened.ready();
+  const recovered = await reopened.find(id);
+  expect(recovered?.status).toBe("queued");
+  expect(recovered?.ranOnce).toBe(true); // next dispatch continues, not re-runs
+  expect(recovered?.schedulable).toBe(false);
+  // The claim died with the old instance; the reopened one can claim.
+  expect(reopened.beginRun(id)).toBe(true);
+});
+
+it("retryRun releases a claim so the next tick can dispatch again", async () => {
+  const s = createOffPeakService({ storeDir: dir, client: fakeClient() });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  expect(s.beginRun(id)).toBe(true);
+  s.retryRun(id);
+  expect(s.beginRun(id)).toBe(true);
+});
+
+it("retakes tickets the gateway reports as not_found", async () => {
+  const client = fakeClient({
+    states: ["queued", "ready"],
+    batchResult: async (ticketIds) => ({
+      tickets: ticketIds.map((ticketId) => ({
+        ticketId,
+        state: ticketId === "ticket-1" ? "not_found" : "ready",
+      })),
+    }),
+  });
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  await s.syncCycle();
+  const task = await s.find(created.task.offPeakTaskId);
+  expect(client.taken).toHaveLength(2);
+  expect(task?.serverTicketId).toBe("ticket-2");
+  expect(task?.schedulable).toBe(true);
+});
+
+it("completes a task whose successful reply merely mentions 3102", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(
+    dir,
+    "Fixed issue 3102 and ticket 31020 today",
+  );
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+    ),
+  );
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  // No continuation was queued: exactly one off-peak send happened.
+  expect(
+    calls.filter(
+      (c) =>
+        c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+    ),
+  ).toHaveLength(1);
   await bridge.close();
 });

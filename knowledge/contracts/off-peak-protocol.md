@@ -61,8 +61,9 @@ next_poll_after (SECONDS), ...}` | `429/3103` (+`next_take_at`) | `3101`
   continue); `400/3006` = model not in whitelist
 - `POST /ticket/:id/settle` (no body) - terminal settlement
 
-Poll interval: server `next_poll_after` wins, clamped 5s..5min; failure
-backoff 10s base. Task lifecycle:
+Poll interval: server `next_poll_after` wins, clamped 5s..5min. Upstream
+failure backoff uses a 10s base; the plugin's syncCycle retries failed
+status polls after 30s. Task lifecycle:
 `queued ⇄ paused → running → completed|failed|cancelled`; mid-run 3102 →
 requeue, re-take the ticket (same task_id), continue the same session with a
 continuation prompt. Terminal → settle (outbox with retry).
@@ -105,9 +106,12 @@ fast, never park as "waiting for idle capacity"). Continuation prompt
 run was interrupted (app restart or execution window expired). Do not start
 over; review what has already been done and complete the remaining work."
 
-Turn outcome mapping: completed → task completed + settle; failed with 3102
-→ requeue + re-take + resume dispatch; other failure → failed (no
-auto-retry).
+Turn outcome mapping: completed → task completed + settle; failed with the
+word-bounded provider code 3102 → requeue + re-take + resume dispatch; the
+first two other failures requeue after 30s (the third marks the task
+failed). Plugin behavior beyond upstream: dispatch persists `running` +
+`ranOnce` before the prompt leaves, and loading the store recovers
+interrupted `running` rows as queued continuations.
 
 ## Plugin design (v1 scope)
 

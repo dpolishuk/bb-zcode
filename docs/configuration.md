@@ -90,7 +90,7 @@ runs unattended in this bb:
   busy bound threads defer with backoff.
 - Nothing happens while bb is closed - like ZCode Desktop, there is no
   window to miss; polling resumes on the next start. Tasks are
-  workspace-scoped in `offPeak.json` (separate from automations, like the
+  workspace-scoped in `offpeak.json` (separate from automations, like the
   native tables).
 - v1 limits: tasks need an explicit `model` at creation (the tool normally
   sends one; a task without it fails with guidance instead of guessing), and

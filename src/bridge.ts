@@ -592,8 +592,10 @@ export function createBridge(
       const id = session.dispatchingOffPeakId;
       session.dispatchingOffPeakId = undefined;
       // 3102 (ticket expired) requeues for continuation; everything else is
-      // a terminal outcome for the task.
-      const expired = /3102/.test(response ?? "");
+      // a terminal outcome. Only failed turns can carry the provider code -
+      // a successful reply that merely mentions 3102 must complete the task,
+      // and the boundary keeps 31020-style numbers from matching.
+      const expired = status !== "completed" && /\b3102\b/.test(response ?? "");
       void offpeak
         ?.completeRun(
           id,
@@ -605,6 +607,9 @@ export function createBridge(
           expired ? "execution window expired" : undefined,
         )
         .catch(() => undefined);
+      // The concurrency slot guards active executions: release it only now
+      // that the turn has settled.
+      offPeakDispatching.delete(id);
       if (session.automationOwned && !session.stopping && !session.queue.length)
         void release(session, false, false).catch(() => undefined);
     }
@@ -1287,9 +1292,10 @@ export function createBridge(
       if (offPeakDispatching.size >= 2) break;
       if (!offpeak.beginRun(task.offPeakTaskId)) continue;
       offPeakDispatching.add(task.offPeakTaskId);
-      void dispatchOffPeak(task.offPeakTaskId)
-        .catch(() => undefined)
-        .finally(() => offPeakDispatching.delete(task.offPeakTaskId));
+      // The slot stays held until the dispatched turn settles; every path
+      // that ends without a running turn releases it explicitly inside
+      // dispatchOffPeak (the service claim is released alongside).
+      void dispatchOffPeak(task.offPeakTaskId).catch(() => undefined);
     }
   }
 
@@ -1299,9 +1305,15 @@ export function createBridge(
     try {
       task = await offpeak.find(id);
     } catch {
+      offpeak.retryRun(id);
+      offPeakDispatching.delete(id);
       return;
     }
-    if (!task || !task.serverTicketId) return;
+    if (!task || !task.serverTicketId) {
+      offpeak.retryRun(id);
+      offPeakDispatching.delete(id);
+      return;
+    }
     // Busy bound sessions defer BEFORE any mode write: a rejected send must
     // never switch the user session's permission mode (native guard).
     const existing = sessions.get(task.threadId);
@@ -1314,13 +1326,17 @@ export function createBridge(
         existing.background.active)
     ) {
       await offpeak.deferRun(id).catch(() => undefined);
+      offPeakDispatching.delete(id);
       return;
     }
     if (
       !existing &&
       (constructing.has(task.threadId) || startingClients.has(task.threadId))
-    )
+    ) {
+      offpeak.retryRun(id);
+      offPeakDispatching.delete(id);
       return; // next tick claims it again
+    }
     const credentials = await offPeakCredentials?.();
     if (!credentials) {
       await offpeak.completeRun(
@@ -1328,6 +1344,7 @@ export function createBridge(
         "failed",
         "off-peak requires a desktop sign-in with an individual Coding Plan",
       );
+      offPeakDispatching.delete(id);
       return;
     }
     const idlePlanProviderId = `account:${credentials.family}-offpeak-idle-plan`;
@@ -1337,6 +1354,7 @@ export function createBridge(
         "failed",
         "idle-time task has no model; recreate it with an explicit model",
       );
+      offPeakDispatching.delete(id);
       return;
     }
     const shared = {
@@ -1386,6 +1404,9 @@ export function createBridge(
         session.automationOwned = true;
         session.providerOptions = task.providerOptions;
       }
+      // Persist dispatch progress before the prompt leaves: a crash from
+      // here on recovers as a queued continuation, never a fresh re-run.
+      await offpeak.markRunning(id).catch(() => undefined);
       session.dispatchingOffPeakId = id;
       const executionId = `${id}:${task.ranOnce ? "resume" : "init"}:${randomUUID()}`;
       await send(
@@ -1439,9 +1460,11 @@ export function createBridge(
         await release(session, true, false).catch(() => undefined);
       if (/ZCode is busy|already has a ZCode session/.test(message)) {
         await offpeak.deferRun(id).catch(() => undefined);
+        offPeakDispatching.delete(id);
         return;
       }
       await offpeak.completeRun(id, "failed", message).catch(() => undefined);
+      offPeakDispatching.delete(id);
     }
   }
 
