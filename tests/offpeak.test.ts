@@ -784,3 +784,82 @@ it("fails a task when reading credentials throws instead of stranding the claim"
   ).toBe(false);
   await bridge.close();
 });
+
+// ---- Review round 3: create race, rejected creations, cancel-during-dispatch.
+
+it("rejects concurrent duplicate creates for one bound session before tickets", async () => {
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir, client });
+  const [first, second] = (await Promise.all([
+    s.handle(
+      "offPeak/create",
+      { title: "A", prompt: "a", model: "m" },
+      context,
+    ),
+    s.handle(
+      "offPeak/create",
+      { title: "B", prompt: "b", model: "m" },
+      context,
+    ),
+  ])) as Array<Record<string, unknown>>;
+  expect(first.ok).toBe(true);
+  expect(second).toMatchObject({ ok: false, errorCode: "session_bound" });
+  // The rejected duplicate never took a ticket.
+  expect(client.taken).toHaveLength(1);
+});
+
+it("a cancelled task stays cancelled when dispatch markers arrive late", async () => {
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  expect(await s.cancel(id, context.cwd)).toBe(true);
+  // The dispatcher was already past its snapshot when the cancel landed.
+  await s.markRunning(id);
+  await s.markAdmitted(id);
+  await s.deferRun(id);
+  const task = await s.find(id);
+  expect(task?.status).toBe("cancelled");
+  expect(s.due(new Date(Date.now() + 86_400_000))).toHaveLength(0);
+});
+
+it("a creation whose persistence fails never becomes dispatchable", async () => {
+  const dir2 = mkdtempSync(join(tmpdir(), "bb-zcode-offpeak-persist-"));
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir2, client });
+  // First create succeeds so the store loads and the file exists.
+  await s.handle(
+    "offPeak/create",
+    { title: "seed", prompt: "p", model: "m" },
+    { ...context, providerThreadId: "native-seed", cwd: "/ws-seed" },
+  );
+  // Make the store directory unwritable so the next persist fails.
+  const { chmodSync } = await import("node:fs");
+  chmodSync(dir2, 0o555);
+  try {
+    const result = record(
+      await s.handle(
+        "offPeak/create",
+        { title: "t", prompt: "p", model: "m" },
+        context,
+      ),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      failureStage: "local_persist",
+    });
+    // The rejected entry is gone from the in-memory list: nothing to claim.
+    const listed = record(await s.handle("offPeak/list", {}, context)) as {
+      tasks: unknown[];
+    };
+    expect(listed.tasks).toHaveLength(0);
+  } finally {
+    chmodSync(dir2, 0o755);
+  }
+});

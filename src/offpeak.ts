@@ -337,6 +337,8 @@ export function createOffPeakService(options: {
   let loading: Promise<void> | undefined;
   let writes: Promise<void> = Promise.resolve();
   const dispatching = new Set<string>();
+  // Synchronous create-in-flight reservations (create/create race guard).
+  const creating = new Set<string>();
 
   function load(): Promise<void> {
     loading ??= (async () => {
@@ -427,22 +429,44 @@ export function createOffPeakService(options: {
     const input = createParamsSchema.parse(raw);
     await load();
     // One non-terminal task per bound session, checked before taking a
-    // ticket so refusals do not burn quota.
+    // ticket so refusals do not burn quota. The synchronous reservation
+    // closes the create/create race: two concurrent requests for the same
+    // session must not both pass the check and take tickets.
     const boundSessionId = input.boundSessionId ?? context.providerThreadId;
-    if (
+    const reservationKey = `${context.cwd}\u0000${boundSessionId}`;
+    const bound =
+      creating.has(reservationKey) ||
       loaded!.some(
         (t) =>
           t.boundSessionId === boundSessionId &&
           !TERMINAL_STATUSES.has(t.status) &&
           t.workspacePath === context.cwd,
-      )
-    )
+      );
+    if (bound)
       return {
         ok: false,
         failureStage: "client_validation",
         errorCategory: "client_validation",
         errorCode: "session_bound",
       };
+    creating.add(reservationKey);
+    try {
+      return await createReserved(input, context, boundSessionId);
+    } finally {
+      creating.delete(reservationKey);
+    }
+  }
+
+  async function createReserved(
+    input: z.infer<typeof createParamsSchema>,
+    context: {
+      threadId: string;
+      providerThreadId: string;
+      cwd: string;
+      providerOptions?: unknown;
+    },
+    boundSessionId: string,
+  ): Promise<{ ok: true; task: OffPeakTaskSnapshot } | OffPeakCreateFailure> {
     const offPeakTaskId = `offpeak-${randomUUID()}`;
     let ticket;
     try {
@@ -488,6 +512,9 @@ export function createOffPeakService(options: {
     try {
       await persist(loaded);
     } catch (failure) {
+      // A creation the caller saw as rejected must never dispatch: drop
+      // the in-memory entry so housekeeping cannot pick it up.
+      loaded = loaded!.filter((t) => t.offPeakTaskId !== offPeakTaskId);
       return classifyCreateFailure(failure, "local_persist");
     }
     return { ok: true, task: snapshot(entry) };
@@ -667,14 +694,20 @@ export function createOffPeakService(options: {
    * Persist dispatch progress before the prompt leaves. `ranOnce` is NOT
    * set here: a send that never gets accepted must retry with the original
    * prompt, not the continuation. A worker crash after this point recovers
-   * as a queued fresh run (prompt never left).
+   * as a queued fresh run (prompt never left). A task cancelled while the
+   * dispatcher waited on credentials stays cancelled - terminal states are
+   * never resurrected.
    */
   async function markRunning(id: string): Promise<void> {
-    await mutate(id, (t) => ({
-      ...t,
-      status: "running",
-      startedAt: t.startedAt ?? now().getTime(),
-    })).catch(() => undefined);
+    await mutate(id, (t) =>
+      TERMINAL_STATUSES.has(t.status)
+        ? t
+        : {
+            ...t,
+            status: "running",
+            startedAt: t.startedAt ?? now().getTime(),
+          },
+    ).catch(() => undefined);
   }
 
   /**
@@ -682,7 +715,9 @@ export function createOffPeakService(options: {
    * queued continuation (ranOnce stays true), never a fresh re-run.
    */
   async function markAdmitted(id: string): Promise<void> {
-    await mutate(id, (t) => ({ ...t, ranOnce: true })).catch(() => undefined);
+    await mutate(id, (t) =>
+      TERMINAL_STATUSES.has(t.status) ? t : { ...t, ranOnce: true },
+    ).catch(() => undefined);
   }
 
   /**
@@ -697,12 +732,16 @@ export function createOffPeakService(options: {
       30_000 * 2 ** Math.min(deferred - 1, 5),
       15 * 60_000,
     );
-    await mutate(id, (t) => ({
-      ...t,
-      status: "queued",
-      deferred,
-      nextDispatchAt: now().getTime() + backoff,
-    })).catch(() => undefined);
+    await mutate(id, (t) =>
+      TERMINAL_STATUSES.has(t.status)
+        ? t
+        : {
+            ...t,
+            status: "queued",
+            deferred,
+            nextDispatchAt: now().getTime() + backoff,
+          },
+    ).catch(() => undefined);
   }
 
   /**
