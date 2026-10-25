@@ -694,30 +694,43 @@ export function createOffPeakService(options: {
    * Persist dispatch progress before the prompt leaves. `ranOnce` is NOT
    * set here: a send that never gets accepted must retry with the original
    * prompt, not the continuation. A worker crash after this point recovers
-   * as a queued fresh run (prompt never left). A task cancelled while the
-   * dispatcher waited on credentials stays cancelled - terminal states are
-   * never resurrected.
+   * as a queued fresh run (prompt never left). Returns false when the task
+   * is missing or terminal (cancelled while dispatch waited) or the durable
+   * write failed - the dispatcher must not send in those cases.
    */
-  async function markRunning(id: string): Promise<void> {
-    await mutate(id, (t) =>
-      TERMINAL_STATUSES.has(t.status)
-        ? t
-        : {
-            ...t,
-            status: "running",
-            startedAt: t.startedAt ?? now().getTime(),
-          },
-    ).catch(() => undefined);
+  async function markRunning(id: string): Promise<boolean> {
+    try {
+      const next = await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "running",
+              startedAt: t.startedAt ?? now().getTime(),
+            },
+      );
+      return next !== undefined && next.status === "running";
+    } catch {
+      return false;
+    }
   }
 
   /**
    * The native side accepted the prompt: from here a crash recovers as a
    * queued continuation (ranOnce stays true), never a fresh re-run.
+   * Returns false when the durable admission record could not be written
+   * or the task is terminal - the caller treats that as a failed run so a
+   * restart cannot silently replay an accepted task.
    */
-  async function markAdmitted(id: string): Promise<void> {
-    await mutate(id, (t) =>
-      TERMINAL_STATUSES.has(t.status) ? t : { ...t, ranOnce: true },
-    ).catch(() => undefined);
+  async function markAdmitted(id: string): Promise<boolean> {
+    try {
+      const next = await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status) ? t : { ...t, ranOnce: true },
+      );
+      return next !== undefined && next.ranOnce === true;
+    } catch {
+      return false;
+    }
   }
 
   /**

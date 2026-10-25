@@ -1426,9 +1426,16 @@ export function createBridge(
         session.automationOwned = true;
         session.providerOptions = task.providerOptions;
       }
-      // Persist dispatch progress before the prompt leaves: a crash from
-      // here on recovers as a queued continuation, never a fresh re-run.
-      await offpeak.markRunning(id).catch(() => undefined);
+      // Persist dispatch progress before the prompt leaves. A task that was
+      // cancelled while the dispatcher waited, or whose durable write
+      // failed, must not receive the prompt at all.
+      const running = await offpeak.markRunning(id);
+      if (!running) {
+        if (owned && session)
+          await release(session, true, false).catch(() => undefined);
+        offPeakDispatching.delete(id);
+        return;
+      }
       session.dispatchingOffPeakId = id;
       const executionId = `${id}:${task.ranOnce ? "resume" : "init"}:${randomUUID()}`;
       await send(
@@ -1474,9 +1481,19 @@ export function createBridge(
         },
       );
       // The native side accepted the prompt: only now does a crash recover
-      // as a continuation. The outcome is reported by settle() through the
-      // marker above.
-      await offpeak.markAdmitted(id).catch(() => undefined);
+      // as a continuation. If the durable admission record could not be
+      // written, treat the run as failed so a restart never silently
+      // replays an accepted task.
+      const admitted = await offpeak.markAdmitted(id);
+      if (!admitted && (await offpeak.find(id))?.status !== "cancelled") {
+        if (session) session.dispatchingOffPeakId = undefined;
+        await offpeak
+          .completeRun(id, "failed", "admission record could not be persisted")
+          .catch(() => undefined);
+        if (owned && session)
+          await release(session, true, false).catch(() => undefined);
+        offPeakDispatching.delete(id);
+      }
     } catch (failure) {
       if (session) session.dispatchingOffPeakId = undefined;
       const message =

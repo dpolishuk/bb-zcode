@@ -820,9 +820,10 @@ it("a cancelled task stays cancelled when dispatch markers arrive late", async (
   ) as unknown as { task: { offPeakTaskId: string } };
   const id = created.task.offPeakTaskId;
   expect(await s.cancel(id, context.cwd)).toBe(true);
-  // The dispatcher was already past its snapshot when the cancel landed.
-  await s.markRunning(id);
-  await s.markAdmitted(id);
+  // The dispatcher was already past its snapshot when the cancel landed:
+  // both markers report false so the dispatcher never sends the prompt.
+  expect(await s.markRunning(id)).toBe(false);
+  expect(await s.markAdmitted(id)).toBe(false);
   await s.deferRun(id);
   const task = await s.find(id);
   expect(task?.status).toBe("cancelled");
@@ -839,27 +840,25 @@ it("a creation whose persistence fails never becomes dispatchable", async () => 
     { title: "seed", prompt: "p", model: "m" },
     { ...context, providerThreadId: "native-seed", cwd: "/ws-seed" },
   );
-  // Make the store directory unwritable so the next persist fails.
-  const { chmodSync } = await import("node:fs");
-  chmodSync(dir2, 0o555);
-  try {
-    const result = record(
-      await s.handle(
-        "offPeak/create",
-        { title: "t", prompt: "p", model: "m" },
-        context,
-      ),
-    );
-    expect(result).toMatchObject({
-      ok: false,
-      failureStage: "local_persist",
-    });
-    // The rejected entry is gone from the in-memory list: nothing to claim.
-    const listed = record(await s.handle("offPeak/list", {}, context)) as {
-      tasks: unknown[];
-    };
-    expect(listed.tasks).toHaveLength(0);
-  } finally {
-    chmodSync(dir2, 0o755);
-  }
+  // Deterministic failure on every platform: replace the store file with a
+  // directory so persist's tmp-file rename onto it fails.
+  const { rmSync, mkdirSync } = await import("node:fs");
+  rmSync(join(dir2, "offpeak.json"));
+  mkdirSync(join(dir2, "offpeak.json"));
+  const result = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  );
+  expect(result).toMatchObject({
+    ok: false,
+    failureStage: "local_persist",
+  });
+  // The rejected entry is gone from the in-memory list: nothing to claim.
+  const listed = record(await s.handle("offPeak/list", {}, context)) as {
+    tasks: unknown[];
+  };
+  expect(listed.tasks).toHaveLength(0);
 });
