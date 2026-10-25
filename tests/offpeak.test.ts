@@ -339,6 +339,7 @@ function offPeakHarness(
   storeDir: string,
   completedResponse = "done",
   credentialsMode: "ok" | "throw" = "ok",
+  attachBackgroundJob = false,
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "bb-zcode-offpeak-bridge-"));
   const messages: Record<string, unknown>[] = [];
@@ -373,6 +374,7 @@ function offPeakHarness(
     offPeakClientFactory: () => client,
     clientFactory: (_launch, _cwd, cb) => {
       let nativeId = "";
+      let backgroundJob: Record<string, unknown> | undefined;
       const snapshot = () => ({
         session: { sessionId: nativeId },
         settings: {
@@ -383,7 +385,10 @@ function offPeakHarness(
             ],
           },
         },
-        projection: { turnCount: 0, backgroundJobs: [] },
+        projection: {
+          turnCount: 0,
+          backgroundJobs: backgroundJob ? [backgroundJob] : [],
+        },
       });
       return {
         async request(method: string, raw: unknown) {
@@ -396,8 +401,8 @@ function offPeakHarness(
           }
           if (method === "session/resume") {
             nativeId = String(p.sessionId);
-            const existing = native.get(nativeId);
-            if (!existing) throw new Error("Unknown session");
+            const existing = native.get(nativeId) ?? { cb: undefined };
+            native.set(nativeId, existing);
             existing.cb = cb;
             existing.closed = false;
             return snapshot();
@@ -413,6 +418,11 @@ function offPeakHarness(
             };
           if (method === "session/send") {
             const s = native.get(nativeId)!;
+            if (p.offPeakTaskId !== undefined && attachBackgroundJob)
+              backgroundJob = {
+                taskId: `bg-${p.offPeakTaskId}`,
+                status: "running",
+              };
             const turn = `turn-${++turnSerial}`;
             s.cb?.notification({
               method: "session/event",
@@ -927,4 +937,92 @@ it("polls ticket status in gateway-sized batches and preserves concurrent cancel
   await s.cancel(cancelled!.offPeakTaskId, "/ws-0").catch(() => undefined);
   expect(await s.markRunning(cancelled!.offPeakTaskId)).toBe(false);
   expect((await s.find(cancelled!.offPeakTaskId))?.status).toBe("cancelled");
+});
+
+it("does not send a task into a thread that was rebound to another session", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  // Rebind the thread to a different native session (fork-style resume).
+  await rpc("thread/resume", {
+    threadId: "thread",
+    cwd,
+    providerThreadId: "native-9",
+    options: offPeakOptions,
+    instructionMode: "replace",
+    dynamicTools: [],
+  });
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "failed");
+  expect(String(readStore().tasks[0].failureReason)).toContain(
+    "no longer backs this task's session",
+  );
+  expect(
+    calls.some(
+      (c) =>
+        c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+    ),
+  ).toBe(false);
+  await bridge.close();
+});
+
+it("keeps the dispatcher-owned child alive while a run's background work is active", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir, "done", "ok", true);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  // The fake snapshot gains a running background job after the off-peak
+  // prompt is accepted, so finishTurn sees active background work.
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  // Release the thread so the dispatcher owns the child.
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  await until(() =>
+    calls.some(
+      (c) => c.method === "session/send" && c.params.offPeakRunType === "init",
+    ),
+  );
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  // The child was NOT closed at settle: session/read still reports the
+  // running background job the fake attached to the off-peak turn.
+  // (The fake marks closed only on client.close; assert it is still open.)
+  expect(native.get("native-1")!.closed ?? false).toBe(false);
+  await bridge.close();
 });

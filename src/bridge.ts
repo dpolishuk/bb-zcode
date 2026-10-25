@@ -610,7 +610,14 @@ export function createBridge(
       // The concurrency slot guards active executions: release it only now
       // that the turn has settled.
       offPeakDispatching.delete(id);
-      if (session.automationOwned && !session.stopping && !session.queue.length)
+      // A run that launched native background work keeps its child alive
+      // until that work settles; killing it here would orphan the work.
+      if (
+        session.automationOwned &&
+        !session.stopping &&
+        !session.queue.length &&
+        !session.background.active
+      )
         void release(session, false, false).catch(() => undefined);
     }
     if (session.dispatchingAutomationId) {
@@ -626,7 +633,14 @@ export function createBridge(
       // The dispatcher owns sessions it constructed headlessly; release the
       // child unless the user interleaved a queued prompt. A queued turn
       // keeps the session alive for bb's normal idle lifecycle to release.
-      if (session.automationOwned && !session.stopping && !session.queue.length)
+      // A run that launched native background work keeps its child alive
+      // until that work settles; killing it here would orphan the work.
+      if (
+        session.automationOwned &&
+        !session.stopping &&
+        !session.queue.length &&
+        !session.background.active
+      )
         void release(session, false, false).catch(() => undefined);
     }
   }
@@ -1317,6 +1331,20 @@ export function createBridge(
     // Busy bound sessions defer BEFORE any mode write: a rejected send must
     // never switch the user session's permission mode (native guard).
     const existing = sessions.get(task.threadId);
+    if (existing && existing.providerThreadId !== task.boundSessionId) {
+      // The bb thread was forked/rebound away from the task's session:
+      // sending would run the task's prompt inside the replacement session.
+      await offpeak
+        .completeRun(
+          id,
+          "failed",
+          "the thread no longer backs this task's session (forked or rebound); recreate the task",
+          { permanent: true },
+        )
+        .catch(() => undefined);
+      offPeakDispatching.delete(id);
+      return;
+    }
     if (
       existing &&
       (existing.timeline ||
