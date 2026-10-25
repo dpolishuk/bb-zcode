@@ -584,15 +584,16 @@ export function createOffPeakService(options: {
       (t) => t.nextPollAt === undefined || t.nextPollAt <= now().getTime(),
     );
     if (!due.length) return;
-    // The gateway caps ticket_ids at 100 per batch request; poll in chunks.
-    const results: Awaited<ReturnType<OffPeakServerClient["batchStatus"]>>[] =
-      [];
+    // The gateway caps ticket_ids at 100 per batch request; poll in chunks
+    // and apply each response only to its own chunk - a response's ticket
+    // map covers just the ids that were asked for.
     for (let i = 0; i < due.length; i += 100) {
       const chunk = due.slice(i, i + 100);
       try {
-        results.push(
-          await client.batchStatus(chunk.map((t) => t.serverTicketId!)),
+        const result = await client.batchStatus(
+          chunk.map((t) => t.serverTicketId!),
         );
+        await applyTicketStatuses(result, chunk);
       } catch {
         // Transient gateway failure: retry this chunk on the next tick.
         const backoff = now().getTime() + 30_000;
@@ -605,10 +606,6 @@ export function createOffPeakService(options: {
           ),
         );
       }
-    }
-    if (!results.length) return;
-    for (const result of results) {
-      await applyTicketStatuses(result, due);
     }
   }
 

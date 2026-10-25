@@ -903,6 +903,9 @@ it("polls ticket status in gateway-sized batches and preserves concurrent cancel
   expect(client.statuses).toHaveLength(2);
   expect(client.statuses[0]).toHaveLength(100);
   expect(client.statuses[1]).toHaveLength(10);
+  // Chunk-scoped application: no cross-chunk misses, so no spurious
+  // retakes of healthy tickets after the two-batch poll.
+  expect(client.taken).toHaveLength(110);
   // Rollback vs concurrent cancel: break persistence, cancel a task (its
   // own write also fails, leaving cancelled in memory), then a late
   // markRunning must not resurrect it through the rollback path.
