@@ -1071,6 +1071,59 @@ it("keeps the dispatcher-owned child alive while a run's background work is acti
   await bridge.close();
 });
 
+it("dispatches a /compact prompt natively instead of compacting without the ticket", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  // An initial prompt of exactly "/compact" used to select the native
+  // session/compact branch, dropping the off-peak payload (ticket auth,
+  // idle-plan model, task identity) while dispatch persisted admission.
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Compactor",
+      prompt: "/compact",
+      model: "glm-4.7",
+      permissionMode: "yolo",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+    ),
+  );
+  const send = calls.find(
+    (c) => c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+  )!;
+  expect(send.params.content).toContain("/compact");
+  expect(record(send.params.modelExecution).offPeak).toBeDefined();
+  expect(
+    calls.some(
+      (c) =>
+        c.method === "session/compact" && c.params.offPeakTaskId !== undefined,
+    ),
+  ).toBe(false);
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  await bridge.close();
+});
+
 it("dispatches a management-command prompt natively instead of intercepting it", async () => {
   process.env.BB_BRIDGE_DIR = dir;
   const harness = offPeakHarness(dir);

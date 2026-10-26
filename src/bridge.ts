@@ -1878,7 +1878,14 @@ export function createBridge(
           notification(session, frame);
         return;
       }
-      const compact = !material.attachments && prompt.trim() === "/compact";
+      // /compact is a user affordance like the management commands above:
+      // a dispatched "/compact" must reach the ticket-bound execution path,
+      // not a plain native compaction without the off-peak payload.
+      const compact =
+        automationId === undefined &&
+        offPeakExecution === undefined &&
+        !material.attachments &&
+        prompt.trim() === "/compact";
       session.beforeRowId = Number.MAX_SAFE_INTEGER;
       if (!compact) {
         try {
