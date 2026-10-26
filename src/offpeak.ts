@@ -624,28 +624,42 @@ export function createOffPeakService(options: {
               Math.max(result.nextPollAfterMs, OFF_PEAK_SYNC_MIN_MS),
               OFF_PEAK_SYNC_MAX_MS,
             );
+      // A delayed response may race a 3102 requeue that already replaced
+      // the task's ticket: applying the old ticket's state would mark the
+      // replacement schedulable before the gateway grants it. Only touch
+      // tasks that still hold the ticket this response was polled for.
+      const holdsPolledTicket = (t: StoredOffPeakTask) =>
+        t.serverTicketId === task.serverTicketId;
       if (!ticket) {
         // not_found tickets are re-taken like expired ones.
         await retake(task, nextPoll);
         continue;
       }
       if (ticket.state === "ready" || ticket.state === "active") {
-        await mutate(task.offPeakTaskId, (t) => ({
-          ...t,
-          schedulable: t.status === "queued",
-          ...(ticket.position !== undefined
-            ? { queuePosition: ticket.position }
-            : {}),
-          ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
-        }));
+        await mutate(task.offPeakTaskId, (t) =>
+          holdsPolledTicket(t)
+            ? {
+                ...t,
+                schedulable: t.status === "queued",
+                ...(ticket.position !== undefined
+                  ? { queuePosition: ticket.position }
+                  : {}),
+                ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
+              }
+            : t,
+        );
       } else if (ticket.state === "expired" || ticket.state === "not_found") {
         // Explicitly vanished tickets re-enter the queue like expired ones.
         await retake(task, nextPoll);
       } else {
-        await mutate(task.offPeakTaskId, (t) => ({
-          ...t,
-          ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
-        }));
+        await mutate(task.offPeakTaskId, (t) =>
+          holdsPolledTicket(t)
+            ? {
+                ...t,
+                ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
+              }
+            : t,
+        );
       }
     }
   }
@@ -655,21 +669,38 @@ export function createOffPeakService(options: {
     nextPoll?: number,
   ): Promise<void> {
     if (task.status === "paused" || TERMINAL_STATUSES.has(task.status)) return;
+    // The caller may hold a stale snapshot (e.g. a delayed status poll for a
+    // ticket a concurrent 3102 requeue already replaced): verify the stored
+    // task still holds this ticket before consuming a new one.
+    const current = await find(task.offPeakTaskId);
+    if (
+      !current ||
+      current.serverTicketId !== task.serverTicketId ||
+      current.status === "paused" ||
+      TERMINAL_STATUSES.has(current.status)
+    )
+      return;
     try {
       const ticket = await client.takeTicket(task.offPeakTaskId);
-      await mutate(task.offPeakTaskId, (t) => ({
-        ...t,
-        serverTicketId: ticket.ticketId,
-        schedulable: t.status === "queued" && ticket.state === "ready",
-        ...(ticket.position !== undefined
-          ? { queuePosition: ticket.position }
-          : {}),
-        nextPollAt:
-          nextPoll ??
-          (ticket.nextPollAfterMs === undefined
-            ? undefined
-            : now().getTime() + ticket.nextPollAfterMs),
-      }));
+      await mutate(task.offPeakTaskId, (t) =>
+        t.serverTicketId !== task.serverTicketId
+          ? // Replaced while the take was in flight; leave the taken ticket
+            // unused rather than overwrite the replacement.
+            t
+          : {
+              ...t,
+              serverTicketId: ticket.ticketId,
+              schedulable: t.status === "queued" && ticket.state === "ready",
+              ...(ticket.position !== undefined
+                ? { queuePosition: ticket.position }
+                : {}),
+              nextPollAt:
+                nextPoll ??
+                (ticket.nextPollAfterMs === undefined
+                  ? undefined
+                  : now().getTime() + ticket.nextPollAfterMs),
+            },
+      );
     } catch {
       await mutate(task.offPeakTaskId, (t) => ({
         ...t,

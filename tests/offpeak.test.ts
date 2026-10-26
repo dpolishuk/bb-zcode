@@ -269,6 +269,50 @@ it("sync applies ready states, re-takes expired tickets and settles finals", asy
   expect((await s.find(id))?.status).toBe("completed");
 });
 
+it("a delayed status response for a replaced ticket cannot mark it schedulable", async () => {
+  // The status poll for ticket-1 stalls in flight; while it is pending the
+  // running task expires (3102) and completeRun requeues onto ticket-2.
+  // Codex round 10: the delayed ticket-1 "ready" response used to flip the
+  // replacement schedulable before the gateway granted it.
+  let releaseStatus: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => (releaseStatus = resolve));
+  const client = fakeClient({
+    states: ["queued", "queued"],
+    batchResult: async (ticketIds) => {
+      await gate;
+      return {
+        tickets: ticketIds.map((ticketId) => ({
+          ticketId,
+          state: "ready" as const,
+        })),
+      };
+    },
+  });
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  const sync = s.syncCycle();
+  // Wait until the poll is actually in flight, then expire the run so the
+  // ticket is replaced while the response is pending.
+  for (let i = 0; i < 200 && client.statuses.length === 0; i++)
+    await new Promise((r) => setTimeout(r, 5));
+  expect(client.statuses).toEqual([["ticket-1"]]);
+  await s.completeRun(id, "ticketExpired", "window expired");
+  releaseStatus!();
+  await sync;
+  const task = await s.find(id);
+  expect(task?.serverTicketId).toBe("ticket-2");
+  expect(task?.schedulable).toBe(false);
+  // The stale response also must not have consumed another ticket.
+  expect(client.taken).toEqual([id, id]);
+});
+
 it("ticket-expired outcomes requeue for continuation, failures stop after three", async () => {
   const client = fakeClient();
   const s = createOffPeakService({ storeDir: dir, client });
