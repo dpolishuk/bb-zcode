@@ -182,10 +182,12 @@ user input and re-runs the turn — the same action as the Retry button in
 ZCode Desktop, without duplicating the message. The budget is two automatic
 retries per turn (after roughly 15 s and 45 s); when they are exhausted the
 turn fails with the original native error. Retries are deliberately
-conservative: a turn that already ran any tool is never retried automatically
-(a re-run would repeat its side effects), and idle-time task runs are never
-retried by this path. Older CLIs without the v4 conversation controls fail
-explicitly with the original error instead of retrying.
+conservative: a turn that already streamed any output or ran any tool is
+never retried automatically (the abandoned output cannot be retracted from
+the bb thread, and a re-run would repeat tool side effects), and idle-time
+task runs are never retried by this path. Older CLIs without the v4
+conversation controls fail explicitly with the original error instead of
+retrying.
 
 ## MCP and native runtime preferences
 

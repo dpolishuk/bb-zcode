@@ -335,7 +335,80 @@ it("does not retry a transient failure after the turn already ran tools", async 
   expect(h.retryCommands()).toHaveLength(0);
   expect(h.providerErrors()).toHaveLength(1);
   expect(h.providerErrors()[0]!.willRetry).toBeUndefined();
-  expect(String(h.providerErrors()[0]!.detail)).toMatch(/already ran tools/);
+  expect(String(h.providerErrors()[0]!.detail)).toMatch(
+    /already streamed output or ran tools/,
+  );
+});
+
+it("does not retry a transient failure after output already streamed", async () => {
+  const h = harness();
+  await h.start();
+  await h.send("stream some");
+  h.event("turn.started", {}, "native-turn-1");
+  h.event(
+    "model.streaming",
+    {
+      kind: "text_delta",
+      assistantMessageId: "m1",
+      partId: "p1",
+      delta: "partial answer",
+    },
+    "native-turn-1",
+  );
+  h.failUpstream("native-turn-1");
+  await h.until(() =>
+    h.deltas().some((d) => d.kind === "turn.boundary" && d.status === "failed"),
+  );
+  expect(h.retryCommands()).toHaveLength(0);
+  expect(
+    h
+      .providerErrors()
+      .some((d) =>
+        /already streamed output or ran tools/.test(String(d.detail)),
+      ),
+  ).toBe(true);
+});
+
+it("a fast second failure does not trip the first retry's start watcher", async () => {
+  // Retry 1 has a short start deadline; retry 2 sleeps long enough that a
+  // watcher still bound to the first hold would falsely expire and fail the
+  // turn before retry 2 even issued its command.
+  const h = harness({ retryDelaysMs: [20, 400], retryStartTimeoutMs: 120 });
+  await h.start();
+  await h.send("do");
+  h.setRows([
+    { rowId: 1, entityId: "ent-1", kind: "userInput", state: "complete" },
+    {
+      rowId: 5,
+      entityId: "ent-5",
+      kind: "assistantText",
+      state: "error",
+      actions: { canRetry: true },
+    },
+  ]);
+  h.failUpstream("native-turn-1");
+  await h.until(() => h.retryCommands().length === 1);
+  // The retried turn starts and immediately fails again, installing the next
+  // hold before the first watcher's next poll.
+  h.event("turn.started", {}, "native-turn-2");
+  h.failUpstream("native-turn-2");
+  await h.until(() => h.retryCommands().length === 2);
+  h.event("turn.started", {}, "native-turn-3");
+  h.event(
+    "turn.completed",
+    { resultType: "success", response: "recovered" },
+    "native-turn-3",
+  );
+  await h.until(() =>
+    h
+      .deltas()
+      .some((d) => d.kind === "turn.boundary" && d.status === "completed"),
+  );
+  expect(
+    h
+      .providerErrors()
+      .some((d) => /did not start the retried turn/.test(String(d.detail))),
+  ).toBe(false);
 });
 
 it("does not retry non-transient failure codes", async () => {

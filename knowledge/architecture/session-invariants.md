@@ -61,9 +61,11 @@ matching tests and documentation updates (see
   bounded: every hold emits a bb `provider.error` reconnect row before
   waiting, retries re-run the turn through the native `retryTurn` control
   (rewind to the last user input, no message duplication), and exhaustion
-  fails the turn with the original native error. A turn that already ran any
-  tool, and idle-time ticket runs, are never retried automatically — explicit
-  failure is preserved wherever a retry could repeat side effects.
+  fails the turn with the original native error. A turn that already streamed
+  any output (the abandoned partial answer cannot be retracted from the bb
+  thread) or ran any tool, and idle-time ticket runs, are never retried
+  automatically — explicit failure is preserved wherever a retry could repeat
+  side effects or corrupt the transcript.
 
 ## Context selection lifetime
 

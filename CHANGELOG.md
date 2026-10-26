@@ -8,9 +8,9 @@
   open, shows a provider reconnect row, and re-runs the turn with ZCode's
   native `retryTurn` control — up to two automatic retries per turn. Native
   api-retry state on the event envelope is surfaced the same way while the
-  CLI retries internally. Retries never repeat tool side effects (a turn
-  that already ran tools fails explicitly), never apply to idle-time runs,
-  and interrupting the thread cancels a pending retry.
+  CLI retries internally. Retries never repeat side effects (a turn that
+  already streamed output or ran tools fails explicitly), never apply to
+  idle-time runs, and interrupting the thread cancels a pending retry.
 
 ## 0.11.0 — 2026-10-24
 

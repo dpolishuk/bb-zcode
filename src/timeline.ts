@@ -183,6 +183,7 @@ export class Timeline {
   >();
   private hasText = false;
   private ranTools = false;
+  private streamed = false;
   private toolInputs = new Map<string, unknown>();
   constructor(
     private emit: (deltas: ThreadDelta[]) => void,
@@ -191,6 +192,10 @@ export class Timeline {
   /** True once any native tool ran in this turn; retries would repeat side effects. */
   get toolActivity() {
     return this.ranTools;
+  }
+  /** True once any text/reasoning streamed; a retry cannot retract it from bb. */
+  get streamActivity() {
+    return this.streamed;
   }
   noteToolActivity() {
     this.ranTools = true;
@@ -217,6 +222,7 @@ export class Timeline {
       const id = `${text(p.assistantMessageId, "message")}:${text(p.partId, channel)}`;
       const key = { providerItemId: id };
       if (kind.endsWith("_delta") && typeof p.delta === "string") {
+        this.streamed = true;
         this.streams.set(id, channel);
         if (channel === "agentMessage") this.hasText = true;
         this.emit([{ kind: "item.textDelta", key, channel, text: p.delta }]);

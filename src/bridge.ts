@@ -788,6 +788,7 @@ export function createBridge(
     return (
       !!session.timeline &&
       !session.timeline.toolActivity &&
+      !session.timeline.streamActivity &&
       !session.draining &&
       !session.stopping &&
       !session.compacting &&
@@ -825,11 +826,15 @@ export function createBridge(
   /** Fails the bb turn with the original error after retries cannot continue. */
   function failRetriedTurn(
     session: Session,
+    hold: NonNullable<Session["retry"]>,
     failedTurnId: string,
     message: string,
     info: UpstreamFailureClass,
     detail: string,
   ) {
+    // A newer hold owns the turn when the retried turn already failed again
+    // between this watcher's polls; only the owning hold may settle it.
+    if (session.retry !== hold) return;
     session.retry = undefined;
     emit(session, [
       upstreamErrorDelta(message, info, {
@@ -851,6 +856,8 @@ export function createBridge(
     message: string,
     info: UpstreamFailureClass,
   ) {
+    const hold = session.retry;
+    if (!hold) return;
     const attempt = session.retryCount;
     const delayMs = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)]!;
     emit(session, [
@@ -863,8 +870,6 @@ export function createBridge(
       }),
     ]);
     await new Promise<void>((resolve) => {
-      const hold = session.retry;
-      if (!hold) return resolve();
       hold.wake = resolve;
       const timer = setTimeout(() => {
         hold.timer = undefined;
@@ -874,7 +879,7 @@ export function createBridge(
       timer.unref?.();
       hold.timer = timer;
     });
-    if (!session.timeline || session.stopping || !session.retry) return;
+    if (!session.timeline || session.stopping || session.retry !== hold) return;
     try {
       const range = await session.history.rows();
       const rows = range.rows;
@@ -894,6 +899,7 @@ export function createBridge(
     } catch (failure) {
       return failRetriedTurn(
         session,
+        hold,
         failedTurnId,
         message,
         info,
@@ -902,19 +908,21 @@ export function createBridge(
         }).`,
       );
     }
+    // Watch only until THIS hold is cleared by the retried turn's start; if
+    // the retried turn already failed again, its own hold (and watcher) now
+    // owns settlement and this one must stand down.
     const deadline = Date.now() + retryStartTimeout;
     while (
       Date.now() < deadline &&
       session.timeline &&
       !session.stopping &&
-      session.retry
+      session.retry === hold
     )
       await new Promise((resolve) => setTimeout(resolve, 20));
-    if (!session.timeline || session.stopping || !session.retry) return;
-    // turn.started clears the hold synchronously; still holding means the
-    // command was accepted but no retried turn ever started.
+    if (!session.timeline || session.stopping || session.retry !== hold) return;
     return failRetriedTurn(
       session,
+      hold,
       failedTurnId,
       message,
       info,
@@ -1065,8 +1073,8 @@ export function createBridge(
             ? `Automatic retries are exhausted (${
                 retryDelays.length + 1
               } upstream attempts).`
-            : session.timeline.toolActivity
-              ? "The failed turn already ran tools; it is not retried automatically to avoid repeating side effects."
+            : session.timeline.toolActivity || session.timeline.streamActivity
+              ? "The failed turn already streamed output or ran tools; it is not retried automatically."
               : "This turn is not retried automatically (idle-time run or compaction in progress).";
         emit(session, [
           upstreamErrorDelta(message, info, {
