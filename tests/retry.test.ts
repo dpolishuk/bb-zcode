@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { threadDeltaNotificationParamsSchema } from "@get-bb/plugin-sdk/provider-bridge";
 import { createBridge } from "../src/bridge.js";
 import { record } from "../src/protocol.js";
 import type { ClientCallbacks } from "../src/client.js";
@@ -29,7 +30,8 @@ function harness(
     turn = 0,
     id = 0;
   const messages: Record<string, unknown>[] = [],
-    calls: { method: string; params: Record<string, unknown> }[] = [];
+    calls: { method: string; params: Record<string, unknown> }[] = [],
+    grammarFailures: string[] = [];
   const cwd = mkdtempSync(join(tmpdir(), "bb-zcode-retry-"));
   const snapshot = {
     session: { sessionId: "native-session" },
@@ -69,7 +71,16 @@ function harness(
     });
   }
   const bridge = createBridge({
-    write: (m) => messages.push(m),
+    write: (m) => {
+      // Every emitted thread/delta must satisfy the bb SDK grammar; the
+      // provider.error reconnect rows are new surface for this suite.
+      if (
+        m.method === "thread/delta" &&
+        !threadDeltaNotificationParamsSchema.safeParse(m.params).success
+      )
+        grammarFailures.push(JSON.stringify(m.params).slice(0, 500));
+      messages.push(m);
+    },
     retryDelaysMs: config.retryDelaysMs ?? [30, 30],
     retryStartTimeoutMs: config.retryStartTimeoutMs ?? 5_000,
     accountFactory: () => ({
@@ -203,6 +214,7 @@ function harness(
     send,
     failUpstream,
     until,
+    grammarFailures,
     setRows: (rows: Array<Record<string, unknown>>) => {
       historyRows = rows;
     },
@@ -312,6 +324,7 @@ it("gives up after the configured retries and fails with the original error", as
         d.kind === "item.textClose" && d.text === `ZCode: ${UPSTREAM_ERROR}`,
     );
   expect(fallback).toBeDefined();
+  expect(h.grammarFailures).toEqual([]);
 });
 
 it("does not retry a transient failure after the turn already ran tools", async () => {
@@ -550,4 +563,5 @@ it("surfaces native api-retry envelope state as reconnect rows", async () => {
     providerCode: null,
   });
   expect(rows[0]!.category).toBe("overloaded");
+  expect(h.grammarFailures).toEqual([]);
 });
