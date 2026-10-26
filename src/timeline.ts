@@ -182,11 +182,19 @@ export class Timeline {
     }
   >();
   private hasText = false;
+  private ranTools = false;
   private toolInputs = new Map<string, unknown>();
   constructor(
     private emit: (deltas: ThreadDelta[]) => void,
     private cwd = "",
   ) {}
+  /** True once any native tool ran in this turn; retries would repeat side effects. */
+  get toolActivity() {
+    return this.ranTools;
+  }
+  noteToolActivity() {
+    this.ranTools = true;
+  }
 
   event(type: string, raw: unknown) {
     const p = record(raw);
@@ -223,6 +231,7 @@ export class Timeline {
         this.tools.get(id)?.parentRef ?? text(p.parentToolCallId);
       const key = { providerItemId: id, ...(parentRef ? { parentRef } : {}) };
       if (p.kind === "scheduled" || p.kind === "started") {
+        this.ranTools = true;
         if (this.tools.has(id)) return;
         const name = text(p.toolName, "ZCode tool");
         const input = p.input ?? this.toolInputs.get(id);

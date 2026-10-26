@@ -134,6 +134,16 @@ type Session = {
   dispatchingOffPeakId?: string;
   /** True when the dispatcher constructed this session and owns its release. */
   automationOwned?: boolean;
+  /** Automatic retries already spent on transient upstream failures this turn. */
+  retryCount: number;
+  /** Active hold between automatic retries of a transient upstream failure. */
+  retry?: {
+    failedTurnId: string;
+    timer?: ReturnType<typeof setTimeout>;
+    wake?: () => void;
+  };
+  /** Last native api-retry state surfaced on the event envelope (dedupe key). */
+  lastApiRetry?: string;
 };
 type ClientFactory = (
   launch: LaunchSpec,
@@ -165,6 +175,41 @@ const modeFor = (options: BridgeExecutionOptions) =>
     : options.permissionMode === "full"
       ? "yolo"
       : "build";
+
+/**
+ * Native turn-failure codes that describe transient upstream conditions
+ * (5xx server errors, provider overload, retryable network failures). The
+ * app-server event carries them in error.code/error.type; the native runtime
+ * has already exhausted its internal request ladder by the time they surface.
+ */
+const TRANSIENT_FAILURE_CODES = new Set([
+  "model_request_failed",
+  "model_request_timeout",
+]);
+/** Default waits before automatic turn retries; length bounds the retries. */
+const UPSTREAM_RETRY_DELAYS_MS = [15_000, 45_000];
+/** How long a retried native turn may take to start before giving up. */
+const RETRY_START_TIMEOUT_MS = 30_000;
+
+type UpstreamFailureClass = {
+  category: "overloaded" | "internal" | "connection-failed";
+  providerCode: string;
+};
+
+/** Classifies a native turn failure, or returns undefined when not transient. */
+function upstreamFailureClass(
+  error: Record<string, unknown>,
+): UpstreamFailureClass | undefined {
+  const code = text(error.code) || text(error.type);
+  if (!TRANSIENT_FAILURE_CODES.has(code)) return undefined;
+  const message = text(error.message);
+  const category = /\boverload/i.test(message)
+    ? ("overloaded" as const)
+    : /timeout|timed out|network|fetch|connection|econn/i.test(message)
+      ? ("connection-failed" as const)
+      : ("internal" as const);
+  return { category, providerCode: code };
+}
 
 /** The native probe performs one real model request; keep it explicit. */
 async function checkConnectivity(session: Session, argument: string) {
@@ -401,6 +446,10 @@ export function createBridge(
     automationTickMs?: number;
     /** Test seam: replace the off-peak gateway client entirely. */
     offPeakClientFactory?: () => OffPeakServerClient;
+    /** Test seam: waits before automatic upstream-turn retries. */
+    retryDelaysMs?: number[];
+    /** Test seam: how long a retried turn may take to start. */
+    retryStartTimeoutMs?: number;
   } = {},
 ) {
   const write =
@@ -452,6 +501,9 @@ export function createBridge(
       >)
     | undefined;
   const offPeakDispatching = new Set<string>();
+  const retryDelays = config.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS;
+  const retryStartTimeout =
+    config.retryStartTimeoutMs ?? RETRY_START_TIMEOUT_MS;
   const notify = (method: string, params: unknown) =>
     write({ jsonrpc: "2.0", method, params });
   const emit = (session: Session, deltas: ThreadDelta[]) =>
@@ -575,6 +627,12 @@ export function createBridge(
     response?: string,
     checkpoint?: string,
   ) {
+    // A pending automatic-retry hold dies with the turn it belongs to.
+    if (session.retry) {
+      clearTimeout(session.retry.timer);
+      session.retry.wake?.();
+      session.retry = undefined;
+    }
     cancelTools(session);
     session.injectedNativeCalls.clear();
     const timeline = session.timeline;
@@ -721,6 +779,149 @@ export function createBridge(
     }
   }
 
+  /**
+   * Automatic retries are bounded and conservative: only transient upstream
+   * failures, only turns that produced no native tool side effects (a retry
+   * rewinds and re-runs the turn), never idle-time ticket runs.
+   */
+  function canHoldForRetry(session: Session) {
+    return (
+      !!session.timeline &&
+      !session.timeline.toolActivity &&
+      !session.draining &&
+      !session.stopping &&
+      !session.compacting &&
+      !session.dispatchingOffPeakId &&
+      !session.retry &&
+      session.retryCount < retryDelays.length
+    );
+  }
+
+  function upstreamErrorDelta(
+    message: string,
+    info: UpstreamFailureClass,
+    extra: {
+      detail: string;
+      willRetry?: boolean;
+      providerTurnId?: string;
+      httpStatusCode?: number | null;
+    },
+  ): ThreadDelta {
+    return {
+      kind: "provider.error",
+      message,
+      detail: extra.detail,
+      ...(extra.willRetry === undefined ? {} : { willRetry: extra.willRetry }),
+      category: info.category,
+      errorInfo: {
+        category: info.category,
+        httpStatusCode: extra.httpStatusCode ?? null,
+        providerCode: info.providerCode,
+      },
+      ...(extra.providerTurnId ? { providerTurnId: extra.providerTurnId } : {}),
+    };
+  }
+
+  /** Fails the bb turn with the original error after retries cannot continue. */
+  function failRetriedTurn(
+    session: Session,
+    failedTurnId: string,
+    message: string,
+    info: UpstreamFailureClass,
+    detail: string,
+  ) {
+    session.retry = undefined;
+    emit(session, [
+      upstreamErrorDelta(message, info, {
+        detail,
+        providerTurnId: failedTurnId,
+      }),
+    ]);
+    void finishTurn(session, "failed", { response: `ZCode: ${message}` });
+  }
+
+  /**
+   * Holds the bb turn open across a failed native turn and restarts it with
+   * the CLI's own retryTurn control, which rewinds to the last user input —
+   * the retried native turn then streams into the same bb turn.
+   */
+  async function retryUpstreamFailure(
+    session: Session,
+    failedTurnId: string,
+    message: string,
+    info: UpstreamFailureClass,
+  ) {
+    const attempt = session.retryCount;
+    const delayMs = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)]!;
+    emit(session, [
+      upstreamErrorDelta(message, info, {
+        detail: `ZCode will retry this turn automatically (attempt ${
+          attempt + 1
+        } of ${retryDelays.length + 1}) in ${Math.round(delayMs / 1000)} s.`,
+        willRetry: true,
+        providerTurnId: failedTurnId,
+      }),
+    ]);
+    await new Promise<void>((resolve) => {
+      const hold = session.retry;
+      if (!hold) return resolve();
+      hold.wake = resolve;
+      const timer = setTimeout(() => {
+        hold.timer = undefined;
+        hold.wake = undefined;
+        resolve();
+      }, delayMs);
+      timer.unref?.();
+      hold.timer = timer;
+    });
+    if (!session.timeline || session.stopping || !session.retry) return;
+    try {
+      const range = await session.history.rows();
+      const rows = range.rows;
+      // canRetry lives on the conversation tip (the failed assistant row);
+      // accepting anything older would rewind a different turn.
+      const row = [...rows]
+        .reverse()
+        .find((r) => r.actions?.canRetry === true && r.entityId);
+      const tip = rows.at(-1);
+      if (!row || row.entityId === undefined || !tip || tip.rowId !== row.rowId)
+        throw new Error("no retryable conversation tip");
+      await session.history.command(
+        "retryTurn",
+        { target: { rowId: row.rowId, entityId: row.entityId } },
+        range,
+      );
+    } catch (failure) {
+      return failRetriedTurn(
+        session,
+        failedTurnId,
+        message,
+        info,
+        `The automatic retry could not start (${
+          failure instanceof Error ? failure.message : "v4 controls unavailable"
+        }).`,
+      );
+    }
+    const deadline = Date.now() + retryStartTimeout;
+    while (
+      Date.now() < deadline &&
+      session.timeline &&
+      !session.stopping &&
+      session.retry
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    if (!session.timeline || session.stopping || !session.retry) return;
+    // turn.started clears the hold synchronously; still holding means the
+    // command was accepted but no retried turn ever started.
+    return failRetriedTurn(
+      session,
+      failedTurnId,
+      message,
+      info,
+      "ZCode did not start the retried turn.",
+    );
+  }
+
   function notification(session: Session, frame: Frame) {
     if (session.stopping) return;
     if (session.starting) {
@@ -762,7 +963,54 @@ export function createBridge(
       session.lastSeq = seq;
     }
     const payload = record(event.payload);
-    if (event.type === "turn.started") session.activeTurnId = event.turnId;
+    // Native model-retry state rides on the event envelope while the CLI
+    // climbs its internal request ladder; surface it as bb reconnect rows.
+    const apiRetry = record(event.apiRetry);
+    if (Object.keys(apiRetry).length) {
+      const key = `${Number(apiRetry.attempt) || 0}:${text(apiRetry.error)}`;
+      if (session.timeline && key !== session.lastApiRetry) {
+        session.lastApiRetry = key;
+        const status = apiRetry.errorStatus;
+        const category =
+          status === 502 || status === 503 || status === 529
+            ? ("overloaded" as const)
+            : ("internal" as const);
+        emit(session, [
+          {
+            kind: "provider.error",
+            message: text(apiRetry.error, "Model request failed"),
+            detail: `ZCode retry ${Number(apiRetry.attempt) || 0}/${
+              (Number(apiRetry.maxRetries) || 0) + 1
+            }${
+              Number(apiRetry.retryDelayMs)
+                ? ` in ${Math.round(Number(apiRetry.retryDelayMs) / 1000)} s`
+                : ""
+            }.`,
+            willRetry: true,
+            category,
+            errorInfo: {
+              category,
+              httpStatusCode: typeof status === "number" ? status : null,
+              providerCode: null,
+            },
+            ...(event.turnId ? { providerTurnId: event.turnId } : {}),
+          },
+        ]);
+      }
+    } else if (session.lastApiRetry !== undefined) {
+      session.lastApiRetry = undefined;
+    }
+    if (event.type === "turn.started") {
+      session.activeTurnId = event.turnId;
+      // The retried turn's start clears the hold synchronously: a failure of
+      // the retried turn arriving right behind it classifies with a fresh
+      // budget instead of racing this bookkeeping.
+      if (session.retry) {
+        clearTimeout(session.retry.timer);
+        session.retry.wake?.();
+        session.retry = undefined;
+      }
+    }
     if (event.type === "turn.started" && !session.restorable) {
       session.restorable = true;
       notify("thread/identity", {
@@ -772,6 +1020,9 @@ export function createBridge(
       });
     }
     if (event.type === "turn.started" && !session.timeline) {
+      session.retryCount = 0;
+      session.retry = undefined;
+      session.lastApiRetry = undefined;
       session.timeline = new Timeline(
         (deltas) => emit(session, deltas),
         session.cwd,
@@ -794,15 +1045,50 @@ export function createBridge(
             : "failed";
       void finishTurn(session, status, payload);
     } else if (event.type === "turn.failed") {
+      // An active hold owns this turn's settlement; a duplicate failure
+      // event for the failed turn must not settle the bb turn out from
+      // under the pending retry.
+      if (session.retry) return;
+      const error = record(payload.error);
+      const message = text(error.message, "Turn failed.");
+      const info = upstreamFailureClass(error);
+      if (info && canHoldForRetry(session)) {
+        const failedTurnId = event.turnId ?? session.activeTurnId ?? "";
+        session.retryCount++;
+        session.retry = { failedTurnId };
+        void retryUpstreamFailure(session, failedTurnId, message, info);
+        return;
+      }
+      if (info && session.timeline) {
+        const detail =
+          session.retryCount >= retryDelays.length
+            ? `Automatic retries are exhausted (${
+                retryDelays.length + 1
+              } upstream attempts).`
+            : session.timeline.toolActivity
+              ? "The failed turn already ran tools; it is not retried automatically to avoid repeating side effects."
+              : "This turn is not retried automatically (idle-time run or compaction in progress).";
+        emit(session, [
+          upstreamErrorDelta(message, info, {
+            detail,
+            providerTurnId: event.turnId ?? session.activeTurnId,
+          }),
+        ]);
+      }
       void finishTurn(session, "failed", {
-        response: `ZCode: ${text(record(payload.error).message, "Turn failed.")}`,
+        response: `ZCode: ${message}`,
       });
     } else {
       if (event.type === "tool.updated") {
         const id = text(payload.toolCallId);
         if (session.toolServer?.nativeNames.has(text(payload.toolName)))
           session.injectedNativeCalls.add(id);
-        if (session.injectedNativeCalls.has(id)) return;
+        if (session.injectedNativeCalls.has(id)) {
+          // bb tools invoked natively still count as turn side effects.
+          if (["scheduled", "started"].includes(text(payload.kind)))
+            session.timeline.noteToolActivity();
+          return;
+        }
       }
       session.timeline.event(event.type, event.payload);
     }
@@ -1714,6 +2000,7 @@ export function createBridge(
         toolServer,
         skills,
         injectedNativeCalls: new Set(),
+        retryCount: 0,
         history: new History(client, snapshot.session.sessionId),
         background: new BackgroundWork(
           client,
@@ -1959,6 +2246,10 @@ export function createBridge(
           session.accepted.delete(session.accepted.values().next().value!);
       }
       session.compacting = compact;
+      // A fresh bb turn starts with a fresh automatic-retry budget.
+      session.retryCount = 0;
+      session.retry = undefined;
+      session.lastApiRetry = undefined;
       session.timeline = new Timeline(
         (deltas) => emit(session, deltas),
         session.cwd,

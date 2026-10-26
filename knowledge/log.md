@@ -1,5 +1,31 @@
 # Knowledge log
 
+## 2026-10-26 (feat/off-peak branch, unreleased)
+
+- **Added** Automatic retry of transient upstream turn failures in
+  `src/bridge.ts`, motivated by the 2026-10-25 Z.ai 5xx outage (every turn
+  failed with "Provider returned a server error."). Facts pinned while
+  implementing, verified against the installed CLI bundle
+  (`glm/zcode.cjs`, ZCode Desktop 3.16.2):
+  - The app-server `turn.failed` payload error carries `type`/`code` =
+    `model_request_failed` (5xx, overload, retryable network) or
+    `model_request_timeout`; `retryable` is **not** serialized to the event.
+  - The CLI has a v4 conversation command `retryTurn` (`{target}` = tip row
+    with `actions.canRetry`, set only on the failed conversation tip): it
+    rewinds to the last real user input and re-runs the turn — the native
+    Retry button, no message duplication. Reused through the existing
+    `History.command` channel.
+  - bb's `provider.error` delta with `willRetry: true` renders as a
+    "reconnect" system row (SDK grammar v3), so holds and native ladder
+    progress are visible without failing the turn.
+  - The session/event envelope may carry `apiRetry` (`{kind: "api_retry",
+attempt, maxRetries, retryDelayMs, errorStatus, error}`) while the CLI
+    climbs its internal retry ladder; the bridge surfaces it deduplicated.
+- **Updated** [Session invariants](architecture/session-invariants.md):
+  retry visibility/bounds added to explicit failure, hard-bounds table row.
+  Behavior documented in `docs/configuration.md` ("Upstream failures and
+  automatic turn retries"); tests in `tests/retry.test.ts`.
+
 ## 2026-10-24 (v0.11.0, feat/off-peak branch)
 
 - **Added** Idle-time (off-peak) task host, completing roadmap stage 6:

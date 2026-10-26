@@ -167,6 +167,26 @@ stale-turn recovery when no turn remains active. `/compact` uses the native
 compaction operation. Normal context reporting uses native estimates; billing
 cost is not fabricated.
 
+## Upstream failures and automatic turn retries
+
+When the model provider fails a turn with a transient upstream condition — a
+5xx server error, provider overload, or a retryable network failure — the
+bridge retries the turn automatically instead of surfacing the error
+immediately. Each retry is visible in the thread as a provider reconnect row
+(`Provider returned a server error… retrying`), and while ZCode climbs its own
+internal request ladder that state is surfaced too. Interrupting the thread
+cancels a pending retry and settles the turn as interrupted.
+
+Retries use ZCode's own native `retryTurn` control, which rewinds to the last
+user input and re-runs the turn — the same action as the Retry button in
+ZCode Desktop, without duplicating the message. The budget is two automatic
+retries per turn (after roughly 15 s and 45 s); when they are exhausted the
+turn fails with the original native error. Retries are deliberately
+conservative: a turn that already ran any tool is never retried automatically
+(a re-run would repeat its side effects), and idle-time task runs are never
+retried by this path. Older CLIs without the v4 conversation controls fail
+explicitly with the original error instead of retrying.
+
 ## MCP and native runtime preferences
 
 Set `memoryEnabled` or `nativeSearchEnhancementsEnabled` through bb's plugin
