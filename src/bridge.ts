@@ -1808,7 +1808,13 @@ export function createBridge(
     try {
       const material = await nativeInput(input, session.cwd);
       const prompt = material.content;
+      // Local command interception is a user-composer affordance. Prompts
+      // submitted by the dispatchers are task data, not commands: an
+      // intercepted dispatch would never reach the native side while its
+      // caller has already persisted admission, stranding the run.
       const command =
+        automationId === undefined &&
+        offPeakExecution === undefined &&
         !material.attachments &&
         /^\/(zcode-tasks|zcode-task-output|zcode-task-stop|zcode-file-preview|zcode-file-rewind|zcode-check|zcode-plugin|zcode-automations|zcode-automation-delete|zcode-offpeak|zcode-offpeak-cancel)(?:\s+(.*))?$/.exec(
           prompt.trim(),

@@ -1026,3 +1026,49 @@ it("keeps the dispatcher-owned child alive while a run's background work is acti
   expect(native.get("native-1")!.closed ?? false).toBe(false);
   await bridge.close();
 });
+
+it("dispatches a management-command prompt natively instead of intercepting it", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  // The task prompt is a plugin management command. Local interception would
+  // finish a standalone timeline without a native turn while dispatch has
+  // already persisted admission - stranding the run and its concurrency slot.
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Reporter",
+      prompt: "/zcode-tasks",
+      model: "glm-4.7",
+      permissionMode: "yolo",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+    ),
+  );
+  const send = calls.find(
+    (c) => c.method === "session/send" && c.params.offPeakTaskId !== undefined,
+  )!;
+  expect(send.params.content).toContain("/zcode-tasks");
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  await bridge.close();
+});
