@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.12.0 — 2026-10-27
+## 0.13.0 — 2026-10-27
+
+- Render dynamic workflows in the timeline (roadmap stage 9, v1). The
+  bridge now maps `CreateWorkflow` onto the plugin's own extension item
+  (`zcode/workflow-graph`): the row opens with the script's title while the
+  native tool runs, and closes carrying the `causalityGraph` from the
+  `create_workflow` display payload plus the run id and editable script
+  path picked out of the result text. Payloads are validated at ingest
+  against a declared zod schema (`extensionKinds` registration).
+- The plugin's first frontend bundle (`app.tsx`, built into `dist/app.js`)
+  registers an `experimental_timelineRenderer` for that kind and draws the
+  ZCode timeline language: a rail with phase stations, subagent pills under
+  their station, control-flow arcs above the rail (dashed for back edges),
+  exit markers and hole diamonds, in `currentColor` so it follows the bb
+  theme. An upstream-truncated graph or a missing one keeps the honest
+  fallback - the declarative base only - because half a phase picture
+  would lie. `react`/`@types/react` are type-only devDependencies (bb
+  shims React at runtime).
+- Live per-step lamps, the run pane and a workflows hub remain future
+  work: they need a native run-status event stream (the bridge's
+  `backgroundTask.workflow` snapshot grammar is ready for it).
+
+## 0.12.0 — 2026-10-27 — 2026-10-27
 
 - Open ZCode's native dynamic workflows to plugin sessions (roadmap stage
   8). A new `dynamicWorkflowsEnabled` setting (off by default) sends

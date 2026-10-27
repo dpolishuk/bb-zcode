@@ -2,6 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { parseMcpServers } from "./src/settings.js";
 import { parseSubagents } from "./src/subagents.js";
+import { workflowGraphPayloadSchema } from "./src/timeline.js";
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -171,6 +172,12 @@ export default async function plugin(bb: BbPluginApi) {
       reasoningLevels: [{ id: "none", label: "Model default" }],
       composerActions: ["plan"],
       completedTurnDisplay: "flat",
+      // The dynamic-workflow graph row: the bridge emits items of the wire
+      // kind "zcode/workflow-graph" and the plugin frontend renders them
+      // (experimental_timelineRenderer). Payloads are validated at ingest.
+      extensionKinds: {
+        "workflow-graph": { item: workflowGraphPayloadSchema },
+      },
       models: {
         fallback: [
           {

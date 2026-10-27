@@ -130,6 +130,12 @@ roster of subagents:
   submitting a script - the native skill gate enforces this and the tool
   error tells the model how.
 
+- The timeline renders the workflow graph natively in bb: the
+  `CreateWorkflow` row is drawn as a rail with phase stations, subagent
+  pills and control-flow arcs (the plugin's own extension item and
+  frontend renderer). If upstream truncates the graph the row falls back
+  to the plain summary.
+
 Applies to new sessions. The wire contract (gate params, approval shape,
 the `causalityGraph` display payload, run reads) is pinned in
 `knowledge/contracts/dynamic-workflow-protocol.md`.

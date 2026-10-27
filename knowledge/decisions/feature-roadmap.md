@@ -155,7 +155,7 @@ bridge never syncs a workspace policy, while older supported CLIs (0.16.9)
 validate params strictly and would reject the unknown field. Wire details:
 [workflow contract](../contracts/dynamic-workflow-protocol.md) (draft).
 
-## Stage 9 — dynamic workflow visualization (design ready)
+## Stage 9 — dynamic workflow visualization (v1 shipped in v0.13.0)
 
 The ZCode timeline is drawn from one structured `causalityGraph` payload
 that rides the ordinary `CreateWorkflow` tool result - no new event channel
@@ -163,9 +163,12 @@ needed. On the bb side, `experimental_timelineRenderer` lets a provider
 plugin render the expanded body of its own tool rows, and thread panels plus
 sidebar navigation cover the run pane and a workflows hub; `workflows/runs`
 is readable cross-process with `parentSessionId`+`toolCallId` deep-link keys.
-This is the plugin's first frontend code (`bb.app` bundle), so it is a
-deliberate scope decision, not a blocked one. Live per-step status
-(lamps) beyond `workflows/runs` polling is the main open question.
+v0.13.0 shipped the v1: the plugin's first frontend bundle (`app.tsx` →
+`dist/app.js`) registers the renderer for the `zcode/workflow-graph`
+extension item the bridge emits from the `create_workflow` display
+payload. Live per-step lamps, the run pane and the hub remain open: they
+need a native run-status event stream (bb's `backgroundTask.workflow`
+snapshot grammar is the ready landing zone).
 
 ## Out of scope for this plugin
 

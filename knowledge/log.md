@@ -1,5 +1,19 @@
 # Knowledge log
 
+## 2026-10-27 (v0.13.0, feat/workflow-visualization branch)
+
+- **Added** timeline rendering for dynamic workflows (roadmap stage 9 v1):
+  `CreateWorkflow` maps to the plugin's `zcode/workflow-graph` extension
+  item (payload = the native `causalityGraph` plus run id/script path;
+  zod-validated at ingest via `extensionKinds`), and the plugin's first
+  frontend bundle renders it with `experimental_timelineRenderer` (rail,
+  stations, pills, arcs, holes; `currentColor` theming; honest truncated
+  fallback). React is a runtime shim (type-only devDeps). 2 timeline
+  regressions assert the delta shapes against the SDK grammar; 230 tests
+  green, check exit 0 incl. the new `dist/app.js` build. bb's
+  `backgroundTask.workflow` snapshot grammar is the identified landing
+  zone for future live per-step status.
+
 ## 2026-10-27 (v0.12.0, feat/dynamic-workflows branch)
 
 - **Added** `dynamicWorkflowsEnabled` setting (off by default): sending

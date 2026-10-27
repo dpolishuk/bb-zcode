@@ -2,6 +2,7 @@ import type {
   ThreadDelta,
   DeltaPresentation,
   DeltaItemShape,
+  JsonValue,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import {
   experimental_fileReadPresentation as sdkFileReadPresentation,
@@ -10,6 +11,7 @@ import {
   experimental_webFetchPresentation as sdkWebFetchPresentation,
   experimental_planStepsPresentation as sdkPlanStepsPresentation,
 } from "@get-bb/plugin-sdk/provider-bridge";
+import { z } from "zod";
 import { record, text } from "./protocol.js";
 
 export const toolPresentation = (
@@ -20,6 +22,100 @@ export const toolPresentation = (
   icon: { glyph: "Wrench" },
   ...(detail ? { detail: detail.slice(0, 4000) } : {}),
 });
+
+/**
+ * The extension item kind carrying a dynamic-workflow graph. Declared to bb in
+ * `server.ts` (`extensionKinds`) and rendered by the plugin frontend's
+ * `experimental_timelineRenderer` registration.
+ */
+export const WORKFLOW_GRAPH_EXTENSION_KIND = "zcode/workflow-graph";
+
+const WORKFLOW_TOOL_NAMES = new Set(["CreateWorkflow"]);
+
+/**
+ * Ingest schema for the extension payload (bb validates before persisting).
+ * The graph body is upstream-bounded JSON; only the envelope is load-bearing.
+ */
+export const workflowGraphPayloadSchema = z.looseObject({
+  v: z.literal(1),
+  state: z.enum(["running", "done", "failed"]),
+});
+
+const workflowPresentation = (detail?: string): DeltaPresentation => ({
+  label: { pending: "Running workflow", completed: "Workflow" },
+  icon: { glyph: "Workflow" },
+  ...(detail ? { detail: detail.slice(0, 4000) } : {}),
+});
+
+/** Wire-safe JSON for extension payloads: drops undefined, rejects cycles. */
+const json = (value: Record<string, unknown>): JsonValue =>
+  JSON.parse(JSON.stringify(value)) as JsonValue;
+
+/** Lightweight `meta` name pickup for the running row's title. */
+function workflowScriptTitle(script: string): string | undefined {
+  const meta = script.slice(0, 2048);
+  const match = meta.match(/name:\s*["'`]([^"'`\n]{1,128})["'`]/);
+  return match?.[1];
+}
+
+/**
+ * Running-state payload: the renderer draws the declarative base only until
+ * the graph arrives with the result.
+ */
+export function workflowPayloadRunning(
+  input: unknown,
+): Record<string, unknown> {
+  const args = record(input);
+  const script = text(args.script);
+  const saved = record(args.saved);
+  const title =
+    workflowScriptTitle(script) ?? text(saved.name) ?? text(args.name);
+  return {
+    v: 1,
+    state: "running",
+    ...(title ? { title } : {}),
+  };
+}
+
+/**
+ * Final payload: the native `create_workflow` display payload carries the
+ * full causality graph (steps/lanes/participants/handoffs/phases/edges,
+ * already bounded upstream). The run id and editable script path only exist
+ * in the human-readable content, so they are picked out for the renderer.
+ */
+export function workflowPayloadDone(
+  result: unknown,
+  error?: string,
+): Record<string, unknown> {
+  const r = record(result);
+  const display = record(r.display);
+  const content = text(r.content);
+  const runId = content.match(/dwfrun-[a-z0-9-]+/i)?.[0];
+  const scriptPath = content.match(/\.zcode\/[^\s;,]+?\.dwf\.ts/i)?.[0];
+  const graph =
+    display.kind === "create_workflow" &&
+    Object.keys(record(display.causalityGraph)).length > 0
+      ? record(display.causalityGraph)
+      : undefined;
+  const graphBytes = graph ? JSON.stringify(graph).length : 0;
+  return {
+    v: 1,
+    state: error ? "failed" : "done",
+    ok:
+      display.kind === "create_workflow"
+        ? display.ok !== false
+        : r.success !== false,
+    ...(content ? { summary: content.slice(0, 2000) } : {}),
+    ...(runId ? { runId } : {}),
+    ...(scriptPath ? { scriptPath } : {}),
+    ...(error ? { error: error.slice(0, 2000) } : {}),
+    ...(graph && graphBytes <= 256 * 1024
+      ? { graph }
+      : graph
+        ? { graphTruncated: true }
+        : {}),
+  };
+}
 
 /** Presentation-aware caps for model-generated text carried in rich rows. */
 const cap = (value: string, limit = 64 * 1024) => value.slice(0, limit);
@@ -183,6 +279,7 @@ export class Timeline {
   >();
   private hasText = false;
   private toolInputs = new Map<string, unknown>();
+  private workflowRows = new Map<string, { parentRef?: string }>();
   constructor(
     private emit: (deltas: ThreadDelta[]) => void,
     private cwd = "",
@@ -223,10 +320,34 @@ export class Timeline {
         this.tools.get(id)?.parentRef ?? text(p.parentToolCallId);
       const key = { providerItemId: id, ...(parentRef ? { parentRef } : {}) };
       if (p.kind === "scheduled" || p.kind === "started") {
-        if (this.tools.has(id)) return;
+        if (this.tools.has(id) || this.workflowRows.has(id)) return;
         const name = text(p.toolName, "ZCode tool");
         const input = p.input ?? this.toolInputs.get(id);
         this.toolInputs.delete(id);
+        // Dynamic-workflow authoring rows are the plugin's own extension kind:
+        // the frontend renderer draws the causality graph from the result
+        // payload instead of the generic tool body.
+        if (WORKFLOW_TOOL_NAMES.has(name)) {
+          this.workflowRows.set(id, {
+            ...(parentRef ? { parentRef } : {}),
+          });
+          const payload = workflowPayloadRunning(input);
+          this.emit([
+            {
+              kind: "item.open",
+              key,
+              item: {
+                type: "extension",
+                kind: WORKFLOW_GRAPH_EXTENSION_KIND,
+                payload: json(payload),
+              },
+              presentation: workflowPresentation(
+                typeof payload.title === "string" ? payload.title : undefined,
+              ),
+            },
+          ]);
+          return;
+        }
         const specialized =
           name === "Bash" && typeof record(input).command === "string"
             ? undefined
@@ -268,6 +389,35 @@ export class Timeline {
           this.emit([{ kind: "command.outputSnapshot", key, text: output }]);
         }
       } else if (p.kind === "result" || p.kind === "error") {
+        const workflowRow = this.workflowRows.get(id);
+        if (workflowRow) {
+          this.workflowRows.delete(id);
+          const error =
+            p.kind === "error"
+              ? text(record(p.error).message, "Tool failed")
+              : undefined;
+          const payload = workflowPayloadDone(p.result, error);
+          this.emit([
+            {
+              kind: "item.close",
+              key,
+              status: error ? "failed" : "completed",
+              item: {
+                type: "extension",
+                kind: WORKFLOW_GRAPH_EXTENSION_KIND,
+                payload: json(payload),
+              },
+              presentation: workflowPresentation(
+                typeof payload.runId === "string"
+                  ? payload.runId
+                  : typeof payload.title === "string"
+                    ? payload.title
+                    : undefined,
+              ),
+            },
+          ]);
+          return;
+        }
         const tool = this.tools.get(id) ?? {
           name: text(p.toolName, "ZCode tool"),
           input: undefined,
