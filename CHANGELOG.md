@@ -51,7 +51,11 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   open one more refresh instead of freezing stale lamps. A fourth pass made
   the degraded close require three consecutive journal failures, so a single
   transient timeout retries on the next refresh instead of closing the row
-  without lamps or usage.
+  without lamps or usage. Because a real transport timeout used to kill the
+  whole CLI session (`fail()` + `close()`), `ZCodeClient.request` gained a
+  read-only mode: journal and `session/read` polls time out non-fatally
+  (the late reply is dropped), while mutating requests keep the fail-fast
+  behavior.
 
 ## 0.13.0 — 2026-10-27
 

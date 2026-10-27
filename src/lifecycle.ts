@@ -717,7 +717,14 @@ export class BackgroundWork {
     if (!this.reading)
       this.reading = this.pullWorkflowEvents()
         .then(() =>
-          this.client.request("session/read", { sessionId: this.sessionId }),
+          // Status polls are read-only: a timeout retries next refresh
+          // instead of killing the shared CLI session.
+          this.client.request(
+            "session/read",
+            { sessionId: this.sessionId },
+            undefined,
+            true,
+          ),
         )
         .then((raw) => {
           this.update(record(raw).projection);
@@ -752,6 +759,9 @@ export class BackgroundWork {
                 limit: 200,
               },
               5000,
+              // Journal reads are idempotent polls: a timeout feeds the
+              // failure-streak retry instead of failing the CLI session.
+              true,
             ),
           );
           const events = Array.isArray(reply.events)

@@ -4,6 +4,7 @@ const input = createInterface({ input: process.stdin });
 input.on("line", (line) => {
   const request = JSON.parse(line);
   if (mode === "hang") return;
+  if (mode === "hang-poll" && request.method === "poll") return;
   if (mode === "malformed") {
     process.stdout.write("not-json\n");
     return;

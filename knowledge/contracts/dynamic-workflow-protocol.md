@@ -163,7 +163,9 @@ reuses siteIds), and a terminal row closes only when the journal reports
 `run-settled` (three consecutive pull failures degrade to a run-level
 close; one transient timeout retries) — covering runs first seen already
 settled and the race where the projection turns terminal before the fold
-catches up.
+catches up. Journal and `session/read` polls are read-only on the wire:
+their timeouts reject without failing the CLI session (mutating requests
+still fail-fast), so a slow status read can never end the thread.
 
 ## Open questions for stage 8/9
 

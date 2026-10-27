@@ -47,3 +47,16 @@ it("bounds a stalled request and does not reuse a process with an unknown outcom
     await peer.close();
   }
 });
+it("lets a read-only status poll time out without killing the session", async () => {
+  const peer = client("hang-poll");
+  try {
+    await expect(peer.request("poll", {}, 80, true)).rejects.toThrow(
+      "timed out",
+    );
+    // The shared session survives: the next request still gets answered,
+    // and a late reply to the dropped poll is ignored.
+    expect(await peer.request("after", {})).toBe("Привет 🌍");
+  } finally {
+    await peer.close();
+  }
+});
