@@ -109,7 +109,7 @@ it("sends an explicit dynamic-workflow gate on session create", async () => {
   await bridge.close();
 });
 
-it("keeps dynamic workflows fail-closed when the setting is off", async () => {
+it("omits the gate param when off: fail-closed and 0.16.9-safe", async () => {
   const { bridge, calls, cwd, rpc } = harness();
   await rpc("thread/start", {
     threadId: "thread",
@@ -118,9 +118,11 @@ it("keeps dynamic workflows fail-closed when the setting is off", async () => {
     instructionMode: "replace",
   });
   const create = calls.find((c) => c.method === "session/create")!;
-  // Explicit false, not an omitted key: a cold resume must never inherit a
-  // stale workspace-level policy from the CLI process.
-  expect(create.params.dynamicWorkflowEnabled).toBe(false);
+  // The native gate resolves an absent param to disabled (its workspace
+  // policy defaults to off and the bridge never syncs one), and older
+  // supported CLIs validate create/resume params strictly - an explicit
+  // false would be an unknown field there.
+  expect("dynamicWorkflowEnabled" in create.params).toBe(false);
   await bridge.close();
 });
 

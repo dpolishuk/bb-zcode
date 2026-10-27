@@ -149,9 +149,10 @@ ran a two-phase workflow end to end through a bridge-shaped host: skill gate,
 `CreateWorkflow`, approval via the standard
 `interaction/requestPermission` (already answered by the bridge), run
 completion, and the `<task-notification>` wake turn. v0.12.0 ships the
-`dynamicWorkflowsEnabled` setting with an explicit boolean on create and
-resume (never omitted, so cold recovery cannot inherit a stale workspace
-policy). Wire details:
+`dynamicWorkflowsEnabled` setting: the gate param is sent on create and
+resume only when enabled - the native policy defaults to off and the
+bridge never syncs a workspace policy, while older supported CLIs (0.16.9)
+validate params strictly and would reject the unknown field. Wire details:
 [workflow contract](../contracts/dynamic-workflow-protocol.md) (draft).
 
 ## Stage 9 — dynamic workflow visualization (design ready)
