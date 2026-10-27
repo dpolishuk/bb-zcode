@@ -119,8 +119,9 @@ roster of subagents:
   text visible in the approval.
 - Runs report back through the same background channel as other native
   background work: when a run completes, its `<task-notification>` wakes the
-  session and the model presents the outcome. Runs survive the CLI process
-  and can be listed later through the native read API.
+  session and the model presents the outcome. Run history survives the CLI
+  process - completed runs stay readable through the native read API after
+  the process exits.
 - Workflow subagents use the session's model and consume plan quota while
   bb is open; the run itself continues only while the CLI process lives
   (closing the thread stops active runs, matching the native terminal
