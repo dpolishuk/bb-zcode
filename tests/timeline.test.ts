@@ -47,6 +47,31 @@ it("retains nested tool attribution and streams bounded progress", () => {
     expect(threadDeltaSchema.safeParse(d).success).toBe(true);
 });
 
+it("keeps the workflow row's saved parent attribution when the result omits it", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d));
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "nested-wf",
+    parentToolCallId: "parent-agent",
+    toolName: "CreateWorkflow",
+    input: { script: "export const wf = {}" },
+  });
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "nested-wf",
+    // Nested results can omit the parent reference the scheduled event had.
+    result: { success: true, content: "Run dwfrun-abc started." },
+  });
+  const close = deltas.at(-1);
+  expect(close).toMatchObject({
+    kind: "item.close",
+    key: { providerItemId: "nested-wf", parentRef: "parent-agent" },
+  });
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
 it("retains final command stdout and stderr without requiring progress events", () => {
   const deltas: ThreadDelta[] = [];
   const timeline = new Timeline((d) => deltas.push(...d), "/workspace");

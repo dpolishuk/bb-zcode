@@ -34,6 +34,14 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   exits on its own after printing the summary; the open listener used to pin
   the Node event loop, so a finished POC process lingered and its surrounding
   background task stayed "running" indefinitely.
+- Review fixes (Codex P2 findings): journal pages are drained while
+  `hasMore` is true before a settled run can close its row (25-page guard,
+  cursor resumes next refresh); an actor's lamp tracks its in-flight nodes,
+  so a second ask reactivates a `done` agent instead of lying that it
+  finished; the run-history reader keys its single-flight and TTL cache by
+  workspace and limit so concurrent hub/pane reads never cross workspaces;
+  and a nested workflow row keeps its saved `parentRef` when the result
+  event omits the attribution.
 
 ## 0.13.0 — 2026-10-27
 

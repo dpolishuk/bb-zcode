@@ -373,6 +373,8 @@ interface TrackedActor {
   state: AgentLampState;
   cached?: boolean;
   lastProgressAt: number;
+  /** Node sites currently in flight for this actor (site → live state). */
+  outstanding: Map<string, AgentLampState>;
 }
 interface RunFold {
   afterSequence: number;
@@ -397,6 +399,15 @@ const NODE_LIVE: Record<string, AgentLampState> = {
   repairing: "running",
   nudged: "running",
 };
+/**
+ * An actor is running while any of its in-flight nodes is running; a pending
+ * mix shows as queued. This keeps cross-node interleaves from flickering the
+ * lamp backwards (executing node 1 + queued node 2 stays "running").
+ */
+const liveStateOf = (
+  outstanding: Map<string, AgentLampState>,
+): AgentLampState =>
+  [...outstanding.values()].includes("running") ? "running" : "queued";
 /** Map one journal event onto the fold; unknown types are ignored. */
 function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
   const type = text(event.type);
@@ -422,6 +433,7 @@ function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
           : {}),
         state: "queued",
         lastProgressAt: now,
+        outstanding: new Map(),
       });
   } else if (type.startsWith("node-")) {
     const instance = actorOf(payload.instance);
@@ -436,23 +448,33 @@ function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
       siteId: actorSite,
       state: "queued" as AgentLampState,
       lastProgressAt: now,
+      outstanding: new Map<string, AgentLampState>(),
     };
     if (text(payload.phaseName)) target.phaseName = text(payload.phaseName);
     target.lastProgressAt = now;
     if (type === "node-settled") {
-      const outcome = text(payload.outcome);
-      target.state =
-        outcome === "failed"
-          ? "failed"
-          : outcome === "cancelled"
-            ? "skipped"
-            : "done";
+      // Node settlement is not actor settlement: while other nodes of the
+      // same actor are still in flight the lamp stays live, and only the
+      // final node's outcome makes the actor terminal.
+      target.outstanding.delete(instance);
+      if (target.outstanding.size > 0) {
+        target.state = liveStateOf(target.outstanding);
+      } else {
+        const outcome = text(payload.outcome);
+        target.state =
+          outcome === "failed"
+            ? "failed"
+            : outcome === "cancelled"
+              ? "skipped"
+              : "done";
+      }
       if (payload.cached === true) target.cached = true;
     } else {
       const live = NODE_LIVE[type.slice(5)];
-      // A settled agent stays settled; later queue events never rewind it.
-      if (live && target.state !== "done" && target.state !== "failed")
-        target.state = live;
+      if (live) {
+        target.outstanding.set(instance, live);
+        target.state = liveStateOf(target.outstanding);
+      }
     }
     fold.actors.set(actorSite, target);
   } else if (type === "usage-updated") {
@@ -677,34 +699,41 @@ export class BackgroundWork {
     return this.reading;
   }
   /**
-   * Cursor-paged journal reads per open run. A run whose journal is done
-   * stops pulling; a CLI without the v4 surface degrades to run-level rows.
+   * Cursor-paged journal reads per open run. Pages are drained before the
+   * following `session/read` can observe the run as settled - closing on a
+   * half-folded journal would freeze stale lamps. A run whose journal is
+   * done stops pulling; a CLI without the v4 surface degrades to run-level
+   * rows.
    */
   private async pullWorkflowEvents() {
     for (const [runId, fold] of this.runs) {
       if (fold.settled) continue;
       try {
-        const reply = record(
-          await this.client.request(
-            "v4/conversation/workflowRunEvents",
-            {
-              sessionId: this.sessionId,
-              runId,
-              ...(fold.afterSequence >= 0
-                ? { afterSequence: fold.afterSequence }
-                : {}),
-              limit: 200,
-            },
-            5000,
-          ),
-        );
-        const events = Array.isArray(reply.events)
-          ? reply.events.map(record)
-          : [];
-        for (const event of events) foldRunEvent(fold, event);
-        const last = events.at(-1);
-        if (last && typeof last.sequence === "number")
-          fold.afterSequence = last.sequence;
+        // The cap guards a runaway journal; the cursor resumes next refresh.
+        for (let page = 0; page < 25; page++) {
+          const reply = record(
+            await this.client.request(
+              "v4/conversation/workflowRunEvents",
+              {
+                sessionId: this.sessionId,
+                runId,
+                ...(fold.afterSequence >= 0
+                  ? { afterSequence: fold.afterSequence }
+                  : {}),
+                limit: 200,
+              },
+              5000,
+            ),
+          );
+          const events = Array.isArray(reply.events)
+            ? reply.events.map(record)
+            : [];
+          for (const event of events) foldRunEvent(fold, event);
+          const last = events.at(-1);
+          if (last && typeof last.sequence === "number")
+            fold.afterSequence = last.sequence;
+          if (reply.hasMore !== true || events.length === 0) break;
+        }
       } catch {
         /* lamps need the journal; the status row survives without them */
       }

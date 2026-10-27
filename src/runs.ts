@@ -99,10 +99,18 @@ export async function readWorkflowRuns(
   );
 }
 
-/** Single-flight plus short TTL so pane and hub refreshes share one spawn. */
+/**
+ * Single-flight plus short TTL so pane and hub refreshes share one spawn.
+ * Both are keyed by workspace and limit: one reader serves many projects,
+ * and a cached large-limit page must not answer a smaller request.
+ */
 export class WorkflowRunsReader {
-  private inflight?: Promise<WorkflowRunsSnapshot>;
-  private cached?: { at: number; value: WorkflowRunsSnapshot };
+  private static CACHE_SLOTS = 8;
+  private inflight = new Map<string, Promise<WorkflowRunsSnapshot>>();
+  private cached = new Map<
+    string,
+    { at: number; value: WorkflowRunsSnapshot }
+  >();
   constructor(
     private spawn: (
       cwd: string,
@@ -122,17 +130,30 @@ export class WorkflowRunsReader {
     limit = 50,
     force = false,
   ): Promise<WorkflowRunsSnapshot> {
-    if (!force && this.cached && Date.now() - this.cached.at < this.ttlMs)
-      return Promise.resolve(this.cached.value);
-    this.inflight ??= this.spawn(cwd, limit)
+    const key = `${limit}:${cwd}`;
+    if (!force) {
+      const hit = this.cached.get(key);
+      if (hit && Date.now() - hit.at < this.ttlMs)
+        return Promise.resolve(hit.value);
+    }
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const flight = this.spawn(cwd, limit)
       .then((value) => {
-        this.cached = { at: Date.now(), value };
+        if (this.cached.size >= WorkflowRunsReader.CACHE_SLOTS) {
+          const oldest = [...this.cached.entries()].sort(
+            (a, b) => a[1].at - b[1].at,
+          )[0];
+          if (oldest) this.cached.delete(oldest[0]);
+        }
+        this.cached.set(key, { at: Date.now(), value });
         return value;
       })
       .finally(() => {
-        this.inflight = undefined;
+        this.inflight.delete(key);
       });
-    return this.inflight;
+    this.inflight.set(key, flight);
+    return flight;
   }
 }
 

@@ -200,6 +200,149 @@ it("renders a dynamic-workflow run as a local_workflow task with agent lamps", a
   ).toBe("done");
   expect(tasks.active).toBe(false);
 });
+it("reactivates an agent lamp when its actor runs a subsequent node", async () => {
+  const deltas: ThreadDelta[] = [];
+  let events = journalPage([
+    {
+      type: "actor-created",
+      payload: { actor: { siteId: "actor#1" }, name: "one" },
+    },
+    {
+      type: "node-dispatched",
+      payload: { instance: { siteId: "ask#1" }, actor: { siteId: "actor#1" } },
+    },
+    {
+      type: "node-settled",
+      payload: { instance: { siteId: "ask#1" }, outcome: "ok" },
+    },
+  ]);
+  const wire: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents") return events;
+      if (method === "session/read")
+        return {
+          projection: {
+            backgroundJobs: [
+              { taskId: "dwfrun-3", taskKind: "workflow", status: "running" },
+            ],
+          },
+        };
+      return {};
+    },
+    async close() {},
+  };
+  const tasks = new BackgroundWork(
+    wire,
+    "native",
+    (d) => deltas.push(...d),
+    () => "glm-5.3",
+  );
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-3", taskKind: "workflow", status: "running" },
+    ],
+  });
+  const agentState = () => {
+    const progress = [...deltas]
+      .reverse()
+      .find((d) => d.kind === "item.progress");
+    const snapshot = record(record(record(progress).snapshot).workflow);
+    return record((snapshot.agents as unknown[])[0]).state;
+  };
+  // The first node settles; the actor immediately gets a second ask.
+  await tasks.refresh();
+  expect(agentState()).toBe("done");
+  events = journalPage([
+    {
+      type: "node-dispatched",
+      payload: { instance: { siteId: "ask#2" }, actor: { siteId: "actor#1" } },
+    },
+    { type: "node-executing", payload: { instance: { siteId: "ask#2" } } },
+  ]);
+  await tasks.refresh();
+  expect(agentState()).toBe("running");
+  events = journalPage([
+    {
+      type: "node-settled",
+      payload: { instance: { siteId: "ask#2" }, outcome: "failed" },
+    },
+  ]);
+  await tasks.refresh();
+  expect(agentState()).toBe("failed");
+});
+it("drains every journal page before the settled run closes the row", async () => {
+  const deltas: ThreadDelta[] = [];
+  const calls: Array<Record<string, unknown>> = [];
+  // Page 1 leaves the actor mid-run and the journal continued.
+  const page1 = {
+    events: [
+      {
+        sequence: 0,
+        type: "actor-created",
+        payload: { actor: { siteId: "actor#1" }, name: "one" },
+      },
+      {
+        sequence: 1,
+        type: "node-dispatched",
+        payload: {
+          instance: { siteId: "ask#1" },
+          actor: { siteId: "actor#1" },
+        },
+      },
+    ],
+    hasMore: true,
+  };
+  // Page 2 carries the final usage and settlement.
+  const page2 = {
+    events: [
+      {
+        sequence: 2,
+        type: "node-settled",
+        payload: { instance: { siteId: "ask#1" }, outcome: "ok" },
+      },
+      { sequence: 3, type: "usage-updated", payload: { spentTokens: 34 } },
+      { sequence: 4, type: "run-settled", payload: { status: "completed" } },
+    ],
+    hasMore: false,
+  };
+  const pages = [page1, page2];
+  const wire: ZCodeConnection = {
+    async request(method: string, params?: unknown) {
+      if (method === "v4/conversation/workflowRunEvents") {
+        calls.push(record(params));
+        return pages.shift() ?? { events: [], hasMore: false };
+      }
+      if (method === "session/read")
+        return {
+          projection: {
+            backgroundJobs: [
+              { taskId: "dwfrun-4", taskKind: "workflow", status: "completed" },
+            ],
+          },
+        };
+      return {};
+    },
+    async close() {},
+  };
+  const tasks = new BackgroundWork(
+    wire,
+    "native",
+    (d) => deltas.push(...d),
+    () => "glm-5.3",
+  );
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-4", taskKind: "workflow", status: "running" },
+    ],
+  });
+  await tasks.refresh();
+  // Both pages were pulled in one refresh before the close froze the fold.
+  expect(calls).toHaveLength(2);
+  expect(calls[1]).toMatchObject({ afterSequence: 1 });
+  const closed = deltas.find((d) => d.kind === "item.close");
+  expect(closed?.status).toBe("completed");
+  expect(record(record(closed).item).summary).toBe("completed · 34 tokens");
+});
 it("keeps the workflow row honest when the journal surface is unavailable", async () => {
   const deltas: ThreadDelta[] = [];
   const wire: ZCodeConnection = {

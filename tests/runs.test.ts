@@ -84,3 +84,30 @@ it("shares one spawn per TTL window across concurrent readers", async () => {
   await reader.read("/w", 50, true);
   expect(spawns).toBe(2);
 });
+
+it("keys spawns and cached pages by workspace and limit", async () => {
+  const spawns: string[] = [];
+  const reader = new WorkflowRunsReader(async (cwd, limit) => {
+    spawns.push(`${limit}:${cwd}`);
+    return {
+      runs: [{ runId: `dwfrun-${limit}-${cwd}`, status: "running" as const }],
+      truncated: false,
+    };
+  });
+  // Different workspaces never share a spawn or a cached page.
+  const [west, east] = await Promise.all([
+    reader.read("/west"),
+    reader.read("/east"),
+  ]);
+  expect(spawns.sort()).toEqual(["50:/east", "50:/west"]);
+  expect(west.runs[0]).toMatchObject({ runId: "dwfrun-50-/west" });
+  expect(east.runs[0]).toMatchObject({ runId: "dwfrun-50-/east" });
+  // Same workspace inside the TTL: one cached page, no second spawn.
+  await reader.read("/west");
+  expect(spawns).toHaveLength(2);
+  // A different limit is a different page: it spawns instead of serving the
+  // cached 50-row result.
+  const smaller = await reader.read("/west", 10);
+  expect(spawns).toHaveLength(3);
+  expect(smaller.runs[0]).toMatchObject({ runId: "dwfrun-10-/west" });
+});

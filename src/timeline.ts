@@ -327,7 +327,11 @@ export class Timeline {
       const id = text(p.toolCallId);
       if (!id) return;
       const parentRef =
-        this.tools.get(id)?.parentRef ?? text(p.parentToolCallId);
+        this.tools.get(id)?.parentRef ??
+        // Workflow rows keep their saved parent here; the result event may
+        // omit the attribution the scheduled event carried.
+        this.workflowRows.get(id)?.parentRef ??
+        text(p.parentToolCallId);
       const key = { providerItemId: id, ...(parentRef ? { parentRef } : {}) };
       if (p.kind === "scheduled" || p.kind === "started") {
         if (this.tools.has(id) || this.workflowRows.has(id)) return;
