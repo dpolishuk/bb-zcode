@@ -1364,3 +1364,87 @@ it("settles an orphan replacement ticket when the task is cancelled mid-take", a
   expect(client.settled).toContain("ticket-2");
   expect(task?.serverTicketId).toBe("ticket-1");
 });
+
+// ---- Review round 11: queued-snapshot resurrection, double ticket replacement.
+
+it("a rejected creation stays off disk even after later successful writes", async () => {
+  const client = fakeClient();
+  const s = createOffPeakService({ storeDir: dir, client });
+  // Seed with a successful create so the store loads and persists.
+  await s.handle(
+    "offPeak/create",
+    { title: "seed", prompt: "p", model: "m" },
+    { ...context, providerThreadId: "native-seed", cwd: "/ws-seed" },
+  );
+  // Break persistence so the next creation is rejected and rolled back.
+  const { rmSync, mkdirSync } = await import("node:fs");
+  rmSync(join(dir, "offpeak.json"));
+  mkdirSync(join(dir, "offpeak.json"));
+  const rejected = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "A", prompt: "p", model: "m" },
+      context,
+    ),
+  );
+  expect(rejected).toMatchObject({ ok: false, failureStage: "local_persist" });
+  // Repair the store; a later creation succeeds. The queued corrected
+  // snapshot from the rollback must win: A never reaches disk.
+  rmSync(join(dir, "offpeak.json"), { recursive: true, force: true });
+  const okCreate = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "B", prompt: "p", model: "m" },
+      { ...context, providerThreadId: "native-b" },
+    ),
+  );
+  expect(okCreate.ok).toBe(true);
+  const disk = JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+    tasks: Array<Record<string, unknown>>;
+  };
+  const titles = disk.tasks.map((t) => t.title);
+  expect(titles).toContain("B");
+  expect(titles).toContain("seed");
+  expect(titles).not.toContain("A");
+});
+
+it("a 3102 expiry for an already-replaced ticket keeps the replacement", async () => {
+  const client = fakeClient({
+    states: ["queued", "ready"],
+    batchResult: async (ticketIds) => ({
+      tickets: ticketIds.map((ticketId) => ({
+        ticketId,
+        state: ticketId === "ticket-1" ? "expired" : "queued",
+      })),
+    }),
+  });
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  // Polling observes ticket-1 expired while its turn still runs: installs
+  // replacement ticket-2.
+  await s.syncCycle();
+  expect((await s.find(id))?.serverTicketId).toBe("ticket-2");
+  expect(client.taken).toHaveLength(2);
+  // The turn now fails with 3102 for ticket-1: the expiry must NOT take a
+  // third ticket - the unused replacement stays and sync progresses it.
+  await s.completeRun(id, "ticketExpired", "window expired", {
+    expiredTicketId: "ticket-1",
+  });
+  expect(client.taken).toHaveLength(2);
+  const task = await s.find(id);
+  expect(task?.status).toBe("queued");
+  expect(task?.serverTicketId).toBe("ticket-2");
+  // A matching expiry (current ticket IS the execution ticket) still retakes.
+  await s.completeRun(id, "ticketExpired", "window expired", {
+    expiredTicketId: "ticket-2",
+  });
+  expect(client.taken).toHaveLength(3);
+  expect((await s.find(id))?.serverTicketId).toBe("ticket-3");
+});

@@ -132,6 +132,8 @@ type Session = {
   dispatchingAutomationId?: string;
   /** Set while an idle-time-task turn runs; settle() reports the outcome. */
   dispatchingOffPeakId?: string;
+  /** The ticket the dispatched execution runs on; settles expiry outcomes. */
+  dispatchingOffPeakTicketId?: string;
   /** True when the dispatcher constructed this session and owns its release. */
   automationOwned?: boolean;
 };
@@ -615,8 +617,12 @@ export function createBridge(
       // 3102 (ticket expired) requeues for continuation; everything else is
       // a terminal outcome. Only failed turns can carry the provider code -
       // a successful reply that merely mentions 3102 must complete the task,
-      // and the boundary keeps 31020-style numbers from matching.
+      // and the boundary keeps 31020-style numbers from matching. The
+      // execution's ticket rides along: if polling already replaced it, the
+      // expiry must not take yet another ticket.
       const expired = status !== "completed" && /\b3102\b/.test(response ?? "");
+      const executionTicket = session.dispatchingOffPeakTicketId;
+      session.dispatchingOffPeakTicketId = undefined;
       void offpeak
         ?.completeRun(
           id,
@@ -626,6 +632,9 @@ export function createBridge(
               ? "completed"
               : "failed",
           expired ? "execution window expired" : undefined,
+          expired && executionTicket
+            ? { expiredTicketId: executionTicket }
+            : undefined,
         )
         .catch(() => undefined);
       // The concurrency slot guards active executions: release it only now
@@ -1520,6 +1529,7 @@ export function createBridge(
         return;
       }
       session.dispatchingOffPeakId = id;
+      session.dispatchingOffPeakTicketId = task.serverTicketId;
       const executionId = `${id}:${task.ranOnce ? "resume" : "init"}:${randomUUID()}`;
       await send(
         session,

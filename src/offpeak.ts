@@ -515,8 +515,11 @@ export function createOffPeakService(options: {
       await persist(loaded);
     } catch (failure) {
       // A creation the caller saw as rejected must never dispatch: drop
-      // the in-memory entry so housekeeping cannot pick it up.
+      // the in-memory entry so housekeeping cannot pick it up, AND queue
+      // the corrected snapshot - an already-queued overlapping write still
+      // contains the rejected task and would resurrect it on disk.
       loaded = loaded!.filter((t) => t.offPeakTaskId !== offPeakTaskId);
+      void persist(loaded).catch(() => undefined);
       return classifyCreateFailure(failure, "local_persist");
     }
     return { ok: true, task: snapshot(entry) };
@@ -868,7 +871,7 @@ export function createOffPeakService(options: {
     id: string,
     outcome: "completed" | "failed" | "ticketExpired",
     message?: string,
-    options?: { permanent?: boolean },
+    options?: { permanent?: boolean; expiredTicketId?: string },
   ): Promise<void> {
     dispatching.delete(id);
     const current = await find(id);
@@ -887,7 +890,14 @@ export function createOffPeakService(options: {
       return;
     }
     if (outcome === "ticketExpired") {
-      // Same task_id re-take; the next claim continues the session.
+      // Same task_id re-take; the next claim continues the session. When
+      // the failed execution's ticket was already replaced by a polling-
+      // driven retake, the replacement is unused-but-installed: keep it and
+      // let sync progress it instead of taking yet another ticket.
+      const executionTicket = options?.expiredTicketId;
+      const replaced =
+        executionTicket !== undefined &&
+        current.serverTicketId !== executionTicket;
       await mutate(id, (t) => ({
         ...t,
         status: "queued",
@@ -897,6 +907,7 @@ export function createOffPeakService(options: {
         deferred: 0,
         ...(message ? { failureReason: message } : {}),
       }));
+      if (replaced) return;
       const fresh = await find(id);
       if (fresh) await retake(fresh);
       return;
