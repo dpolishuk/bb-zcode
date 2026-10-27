@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zcode",
-  "version": "0.12.0",
+  "version": "0.14.0",
   "private": true,
   "license": "MIT",
   "author": "Dmitry Polishuk (https://github.com/dpolishuk)",
@@ -36,7 +36,8 @@
         "id": "zcode",
         "displayName": "ZCode"
       }
-    ]
+    ],
+    "app": "./app.tsx"
   },
   "keywords": [
     "bb-plugin",
@@ -50,8 +51,8 @@
     "marketplace:build": "node scripts/marketplace.mjs",
     "marketplace:check": "node scripts/marketplace.mjs --check",
     "check": "npm run marketplace:check && npm run typecheck && npm test && npm run build",
-    "format": "prettier --write server.ts src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github",
-    "format:check": "prettier --check server.ts src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github"
+    "format": "prettier --write server.ts app.tsx src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github",
+    "format:check": "prettier --check server.ts app.tsx src tests scripts docs skills knowledge AGENTS.md README.md CONTRIBUTING.md PLUGIN_OVERVIEW.md marketplace.json package.json tsconfig.json .github"
   },
   "dependencies": {
     "@get-bb/plugin-sdk": "0.6.49",
@@ -65,6 +66,8 @@
     "prettier": "^3.9.10",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.1",
+    "react": "^19.0.0",
+    "@types/react": "^19.0.0"
   }
 }

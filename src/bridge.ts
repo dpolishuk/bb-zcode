@@ -1795,6 +1795,12 @@ export function createBridge(
           (deltas) => {
             if (session) emit(session, deltas);
           },
+          // Workflow journals name no per-actor model; the session's current
+          // selection is the honest default for the agent lamps.
+          () =>
+            session?.contextModel?.modelId ??
+            snapshot.settings.model.current?.modelId ??
+            "ZCode model",
         ),
         beforeRowId: -1,
         restorable: resume || (snapshot.projection?.turnCount ?? 0) > 0,

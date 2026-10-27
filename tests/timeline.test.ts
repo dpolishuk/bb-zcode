@@ -4,6 +4,7 @@ import {
   type ThreadDelta,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { Timeline } from "../src/timeline.js";
+import { record } from "../src/protocol.js";
 
 it("retains nested tool attribution and streams bounded progress", () => {
   const deltas: ThreadDelta[] = [];
@@ -41,6 +42,31 @@ it("retains nested tool attribution and streams bounded progress", () => {
   expect(deltas.at(-1)).toMatchObject({
     kind: "item.close",
     key: { parentRef: "parent-agent" },
+  });
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("keeps the workflow row's saved parent attribution when the result omits it", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d));
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "nested-wf",
+    parentToolCallId: "parent-agent",
+    toolName: "CreateWorkflow",
+    input: { script: "export const wf = {}" },
+  });
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "nested-wf",
+    // Nested results can omit the parent reference the scheduled event had.
+    result: { success: true, content: "Run dwfrun-abc started." },
+  });
+  const close = deltas.at(-1);
+  expect(close).toMatchObject({
+    kind: "item.close",
+    key: { providerItemId: "nested-wf", parentRef: "parent-agent" },
   });
   for (const d of deltas)
     expect(threadDeltaSchema.safeParse(d).success).toBe(true);
@@ -338,6 +364,233 @@ it("keeps the generic tool row for unknown tools and partial inputs", () => {
       item: expect.objectContaining({ type: "tool", tool: "Read" }),
     }),
   );
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("maps CreateWorkflow onto the plugin's workflow-graph extension row", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-1",
+    toolName: "CreateWorkflow",
+    input: {
+      script:
+        'const meta = {\n  name: "poc-two-phase",\n  description: "POC",\n};\nphase("first");',
+    },
+  });
+  const open = deltas.find((d) => d.kind === "item.open")!;
+  // The graph payload from the POC display contract, trimmed to the fields
+  // the renderer reads.
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "wf-1",
+    duration: 50,
+    result: {
+      success: true,
+      content:
+        "The workflow script compiled cleanly and the run started in the background with ID: dwfrun-f1936cc6-91e9. It is still running. The script is saved at .zcode/workflow-drafts/first.dwf.ts; to revise it later, edit that file and pass `path` to AmendWorkflow.",
+      display: {
+        kind: "create_workflow",
+        ok: true,
+        errorCount: 0,
+        diagnostics: [],
+        causalityGraph: {
+          steps: [
+            {
+              id: "ask#1",
+              kind: "ask",
+              label: "one",
+              lane: "actor#1",
+              phase: "phase#1",
+            },
+            {
+              id: "ask#2",
+              kind: "ask",
+              label: "two",
+              lane: "actor#2",
+              phase: "phase#2",
+            },
+          ],
+          lanes: [
+            { id: "actor#1", name: "one" },
+            { id: "actor#2", name: "two" },
+          ],
+          participants: [
+            {
+              id: "phase#1:actor#1",
+              phase: "phase#1",
+              lane: "actor#1",
+              steps: ["ask#1"],
+            },
+            {
+              id: "phase#2:actor#2",
+              phase: "phase#2",
+              lane: "actor#2",
+              steps: ["ask#2"],
+            },
+          ],
+          handoffs: [],
+          phases: [
+            { id: "phase#1", name: "first" },
+            { id: "phase#2", name: "second" },
+          ],
+          phaseEdges: [{ from: "phase#1", to: "phase#2" }],
+          exits: ["phase#2"],
+        },
+      },
+    },
+  });
+  expect(open.item).toEqual({
+    type: "extension",
+    kind: "zcode/workflow-graph",
+    payload: { v: 1, state: "running", title: "poc-two-phase" },
+  });
+  expect(open.presentation).toMatchObject({
+    label: { pending: "Running workflow" },
+    detail: "poc-two-phase",
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("completed");
+  expect(close.item).toMatchObject({
+    type: "extension",
+    kind: "zcode/workflow-graph",
+  });
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("done");
+  expect(payload.ok).toBe(true);
+  expect(payload.runId).toBe("dwfrun-f1936cc6-91e9");
+  expect(payload.scriptPath).toBe(".zcode/workflow-drafts/first.dwf.ts");
+  const graph = record(payload.graph);
+  expect(graph.phases).toEqual([
+    { id: "phase#1", name: "first" },
+    { id: "phase#2", name: "second" },
+  ]);
+  // No generic tool row may appear beside the extension row.
+  expect(
+    deltas.some(
+      (d) =>
+        (d.kind === "item.open" || d.kind === "item.close") &&
+        (d.item as { type?: string })?.type === "tool",
+    ),
+  ).toBe(false);
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("keeps the workflow row honest without a graph and on errors", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-2",
+    toolName: "CreateWorkflow",
+    input: { saved: { name: "nightly" } },
+  });
+  timeline.event("tool.updated", {
+    kind: "error",
+    toolCallId: "wf-2",
+    error: { message: "The workflow script has errors" },
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("failed");
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("failed");
+  expect(payload.graph).toBeUndefined();
+  expect(payload.error).toContain("workflow script has errors");
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("closes pending workflow rows when the turn ends without a result", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-3",
+    toolName: "CreateWorkflow",
+    input: { saved: { name: "nightly" } },
+  });
+  timeline.finish("interrupted");
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("interrupted");
+  expect(close.item).toMatchObject({
+    type: "extension",
+    kind: "zcode/workflow-graph",
+    payload: {
+      v: 1,
+      state: "failed",
+      error: "ZCode ended before the workflow returned.",
+    },
+  });
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("marks a workflow result event that reports failure as failed", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-4",
+    toolName: "CreateWorkflow",
+    input: { script: 'const meta = { name: "broken" };' },
+  });
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "wf-4",
+    result: {
+      success: false,
+      content: "The workflow script has errors: `export` is not allowed",
+    },
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("failed");
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("failed");
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toBe("Tool reported failure");
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("marks a compile failure carried by the display flags as failed", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-5",
+    toolName: "CreateWorkflow",
+    input: { script: 'const meta = { name: "broken" };' },
+  });
+  // POC-verified shape: a failed compile is a SUCCESSFUL tool call whose
+  // display reports ok:false / errorCount>0 - the envelope must not decide.
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "wf-5",
+    result: {
+      success: true,
+      content: "The workflow script has errors: `export` is not allowed.",
+      display: {
+        kind: "create_workflow",
+        ok: false,
+        errorCount: 1,
+        diagnostics: [
+          { message: "`export` is not allowed in a workflow script" },
+        ],
+      },
+    },
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("failed");
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("failed");
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toBe("Workflow script has errors (1).");
+  // The diagnostics text rides in the summary for the renderer fallback.
+  expect(String(payload.summary)).toContain("workflow script has errors");
+  expect(payload.graph).toBeUndefined();
   for (const d of deltas)
     expect(threadDeltaSchema.safeParse(d).success).toBe(true);
 });

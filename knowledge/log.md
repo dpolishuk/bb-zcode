@@ -1,5 +1,19 @@
 # Knowledge log
 
+## 2026-10-27 (v0.13.0, feat/workflow-visualization branch)
+
+- **Added** timeline rendering for dynamic workflows (roadmap stage 9 v1):
+  `CreateWorkflow` maps to the plugin's `zcode/workflow-graph` extension
+  item (payload = the native `causalityGraph` plus run id/script path;
+  zod-validated at ingest via `extensionKinds`), and the plugin's first
+  frontend bundle renders it with `experimental_timelineRenderer` (rail,
+  stations, pills, arcs, holes; `currentColor` theming; honest truncated
+  fallback). React is a runtime shim (type-only devDeps). 2 timeline
+  regressions assert the delta shapes against the SDK grammar; 230 tests
+  green, check exit 0 incl. the new `dist/app.js` build. bb's
+  `backgroundTask.workflow` snapshot grammar is the identified landing
+  zone for future live per-step status.
+
 ## 2026-10-27 (v0.12.0, feat/dynamic-workflows branch)
 
 - **Added** `dynamicWorkflowsEnabled` setting (off by default): sending
@@ -243,3 +257,27 @@
 - **Fixed** v0.9.4 provider mark geometry: terminal cuts are now parallel and
   lean the same way as the ZCode app mark (top-left and bottom-right tips
   lead), with reference-matched bar and diagonal weights.
+- **Added** Stage 9 v2 live-status sources to the
+  [dynamic workflow contract](contracts/dynamic-workflow-protocol.md),
+  POC-verified mid-run on CLI 0.17.0: dynamic runs surface in
+  `session/read` `projection.backgroundJobs` (`taskKind: "workflow"`,
+  taskId = runId, cancellable while running), and
+  `v4/conversation/workflowRunEvents` exposes the run journal with a
+  sequence cursor (`run-launched`/`actor-created`/`node-*`/`usage-updated`/
+  `run-settled`) - the same feed the Desktop lamps consume.
+  `v4/conversation/workflowRunWorkspace` returned no nodes for ask-only
+  scripts, so lamps fold from journal events. Also pinned: bb's
+  `backgroundTask.workflow` grammar is 1-based (index/attempt ≥ 1).
+- **Updated** v0.14.0 closed roadmap stage 9: `BackgroundWork` maps workflow
+  jobs to a `local_workflow` `backgroundTask` row with journal-fed agent
+  lamps and an honest terminal summary; the sidebar Workflows hub and the
+  thread run pane list persisted history via a `workflowRuns` RPC
+  (sessionless cold `workflows/runs` read, single-flight 3 s TTL). Baseline:
+  238 tests, full `npm run check`, live smoke `RUNTIME_VERIFIED`; follow-ups
+  recorded (installed-bb eyeball of the workflow snapshot rendering;
+  `threadPanelAction` → `experimental_tab` migration needs an SDK bump).
+- 2026-10-27: hardened the journal fold after review (drain `hasMore` pages
+  before terminal close; actor lamps track in-flight nodes instead of going
+  terminal on the first settle) — recorded as invariants in
+  contracts/dynamic-workflow-protocol.md; also keyed the run-history reader
+  cache by workspace+limit.

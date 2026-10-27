@@ -33,6 +33,7 @@ export interface ZCodeConnection {
     method: string,
     params: unknown,
     timeoutMs?: number,
+    readOnly?: boolean,
   ): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -103,6 +104,7 @@ export class ZCodeClient implements ZCodeConnection {
     method: string,
     params: unknown,
     timeoutMs = 30_000,
+    readOnly = false,
   ): Promise<unknown> {
     if (this.dead || this.closing)
       return Promise.reject(new Error("ZCode is not running."));
@@ -112,9 +114,14 @@ export class ZCodeClient implements ZCodeConnection {
         this.pending.delete(id);
         const error = new Error(`ZCode timed out: ${method}`);
         reject(error);
-        // The outcome of a mutating request is unknown; do not reuse the process.
-        this.fail(error);
-        void this.close();
+        // The outcome of a mutating request is unknown; do not reuse the
+        // process. A read-only poll (journal/status reads) is idempotent and
+        // a late reply is dropped, so its timeout must not kill the shared
+        // session.
+        if (!readOnly) {
+          this.fail(error);
+          void this.close();
+        }
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {

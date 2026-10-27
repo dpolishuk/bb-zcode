@@ -2,6 +2,13 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { parseMcpServers } from "./src/settings.js";
 import { parseSubagents } from "./src/subagents.js";
+import { workflowGraphPayloadSchema } from "./src/timeline.js";
+import {
+  WorkflowRunsReader,
+  readWorkflowRuns,
+  runRowView,
+} from "./src/runs.js";
+import { workflowRunsRpcContract } from "./src/runsContract.js";
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -106,6 +113,13 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
+  // Launch options captured for the sessionless run-history reader (the
+  // run hub / thread pane RPC below); register() refreshes them per settings.
+  let launchOptions = {
+    executable: "",
+    args: [] as string[],
+    nodeExecutable: "node",
+  };
   function register(values: {
     executable: string;
     args: string;
@@ -120,6 +134,11 @@ export default async function plugin(bb: BbPluginApi) {
     dynamicWorkflowsEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
+    launchOptions = {
+      executable: values.executable,
+      args,
+      nodeExecutable: values.nodeExecutable,
+    };
     const launch = {
       executable: values.executable,
       args,
@@ -171,6 +190,12 @@ export default async function plugin(bb: BbPluginApi) {
       reasoningLevels: [{ id: "none", label: "Model default" }],
       composerActions: ["plan"],
       completedTurnDisplay: "flat",
+      // The dynamic-workflow graph row: the bridge emits items of the wire
+      // kind "zcode/workflow-graph" and the plugin frontend renders them
+      // (experimental_timelineRenderer). Payloads are validated at ingest.
+      extensionKinds: {
+        "workflow-graph": { item: workflowGraphPayloadSchema },
+      },
       models: {
         fallback: [
           {
@@ -199,4 +224,67 @@ export default async function plugin(bb: BbPluginApi) {
   register(await settings.get());
   settings.onChange(register);
   bb.onDispose(() => registered?.dispose());
+
+  // Sidebar hub + thread run pane read run history through this RPC. The
+  // persisted run store outlives any thread's CLI process, so a short-lived
+  // sessionless CLI read answers for any workspace (POC-verified cold read);
+  // reads are single-flight with a short TTL because a spawn is the cost.
+  const runsReader = new WorkflowRunsReader((cwd, limit) =>
+    readWorkflowRuns(launchOptions, process.env, cwd, limit),
+  );
+  const resolveWorkspace = async (input: {
+    threadId?: string;
+    projectId?: string;
+  }): Promise<string> => {
+    if (input.threadId) {
+      const thread = await bb.sdk.threads.get({
+        threadId: input.threadId,
+      });
+      const environmentId =
+        typeof thread.environmentId === "string" ? thread.environmentId : null;
+      if (!environmentId)
+        throw new Error("This thread has no environment checkout yet.");
+      const environment = await bb.sdk.environments.get({ environmentId });
+      if (!environment.path)
+        throw new Error("This thread's environment has no local path.");
+      return environment.path;
+    }
+    if (input.projectId) {
+      const environments = await bb.sdk.environments.list({
+        projectId: input.projectId,
+      });
+      const withPath = environments.filter(
+        (environment) => environment.path && environment.status === "ready",
+      );
+      // The project's own checkout beats managed worktrees for "the runs of
+      // this project" - worktree runs list under their own path key.
+      const own =
+        withPath.find(
+          (environment) =>
+            environment.workspaceProvisionType !== "managed-worktree",
+        ) ?? withPath[0];
+      if (!own?.path)
+        throw new Error("This project has no ready environment checkout.");
+      return own.path;
+    }
+    throw new Error("Pass a threadId or projectId to locate the workspace.");
+  };
+  bb.rpc.register(
+    workflowRunsRpcContract,
+    {
+      workflowRuns: async (input) => {
+        const workspace = await resolveWorkspace(input);
+        const limit = input.limit ?? 50;
+        const snapshot = await runsReader.read(workspace, limit, false);
+        return {
+          runs: snapshot.runs.slice(0, limit).map(runRowView),
+          truncated: snapshot.truncated,
+        };
+      },
+    },
+    {
+      experimental_description:
+        "ZCode dynamic-workflow run history for this workspace (sessionless cold read).",
+    },
+  );
 }

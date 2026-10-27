@@ -3,7 +3,11 @@ import { z } from "zod";
 import type {
   ThreadDelta,
   DeltaItemShape,
+  WorkflowAgentSnapshot,
+  WorkflowAgentState,
+  WorkflowProgressSnapshot,
 } from "@get-bb/plugin-sdk/provider-bridge";
+import { LOCAL_WORKFLOW_TASK_TYPE } from "@get-bb/plugin-sdk/provider-bridge";
 import type { ZCodeConnection } from "./client.js";
 import { ProtocolError } from "./client.js";
 import { record, text } from "./protocol.js";
@@ -355,6 +359,190 @@ export const managementCommands: Array<Record<string, string>> = [
     inputHint: "<task-id>",
   },
 ];
+/**
+ * Live state of one dynamic-workflow run, folded from the run journal's
+ * cursor-paged event stream (`v4/conversation/workflowRunEvents`). The
+ * journal is the same source the Desktop lamps consume; run-level rows in
+ * the session projection carry no per-agent detail (POC-verified 0.17.0).
+ */
+type AgentLampState = "queued" | "running" | "done" | "failed" | "skipped";
+interface TrackedActor {
+  siteId: string;
+  name?: string;
+  phaseName?: string;
+  state: AgentLampState;
+  cached?: boolean;
+  lastProgressAt: number;
+  /** Node sites currently in flight for this actor (site → live state). */
+  outstanding: Map<string, AgentLampState>;
+}
+interface RunFold {
+  afterSequence: number;
+  phaseNames: string[];
+  actors: Map<string, TrackedActor>;
+  /** Ask/world-read site → the actor site that owns it. */
+  nodeActor: Map<string, string>;
+  spentTokens?: number;
+  settled?: { status: string; stopReason?: string; message?: string };
+  /** Consecutive failed journal pulls; one flaky timeout must not degrade. */
+  journalFailures: number;
+}
+const newFold = (): RunFold => ({
+  afterSequence: -1,
+  phaseNames: [],
+  actors: new Map(),
+  nodeActor: new Map(),
+  journalFailures: 0,
+});
+/**
+ * A terminal row may close degraded (run-level status only) only after this
+ * many consecutive journal failures — a persistently unsupported surface.
+ * One transient timeout keeps the row open so the next refresh can retry.
+ */
+const JOURNAL_FAILURE_LIMIT = 3;
+const NODE_LIVE: Record<string, AgentLampState> = {
+  queued: "queued",
+  waiting: "queued",
+  dispatched: "running",
+  executing: "running",
+  repairing: "running",
+  nudged: "running",
+};
+/**
+ * An actor is running while any of its in-flight nodes is running; a pending
+ * mix shows as queued. This keeps cross-node interleaves from flickering the
+ * lamp backwards (executing node 1 + queued node 2 stays "running").
+ */
+const liveStateOf = (
+  outstanding: Map<string, AgentLampState>,
+): AgentLampState =>
+  [...outstanding.values()].includes("running") ? "running" : "queued";
+/** Map one journal event onto the fold; unknown types are ignored. */
+function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
+  const type = text(event.type);
+  const payload = record(event.payload);
+  const now = Date.now();
+  // Journal references are {siteId, ordinal}; loop/fan-out executions reuse
+  // a siteId across ordinals, so the ordinal is part of the runtime
+  // identity of both actors and node instances.
+  const refKey = (raw: unknown): string | undefined => {
+    // text() falls back to "" (not nullish); normalize so ?? map lookups work.
+    const ref = record(raw);
+    const siteId = text(ref.siteId);
+    if (!siteId) return undefined;
+    return typeof ref.ordinal === "number"
+      ? `${siteId}#${ref.ordinal}`
+      : siteId;
+  };
+  if (type === "run-launched") {
+    const names = payload.phaseNames;
+    if (Array.isArray(names))
+      fold.phaseNames = names.map((name) => text(name)).filter(Boolean);
+  } else if (type === "actor-created") {
+    const actorKey = refKey(payload.actor);
+    if (actorKey)
+      fold.actors.set(actorKey, {
+        siteId: actorKey,
+        ...(text(payload.name) ? { name: text(payload.name) } : {}),
+        ...(text(payload.phaseName)
+          ? { phaseName: text(payload.phaseName) }
+          : {}),
+        state: "queued",
+        lastProgressAt: now,
+        outstanding: new Map(),
+      });
+  } else if (type.startsWith("node-")) {
+    const instance = refKey(payload.instance);
+    if (!instance) return;
+    // Settle events name only the node; earlier dispatch events carry the
+    // owning actor, so remember that edge when it is present.
+    const dispatchActor = refKey(payload.actor);
+    const actorSite = dispatchActor ?? fold.nodeActor.get(instance);
+    if (dispatchActor) fold.nodeActor.set(instance, actorSite!);
+    if (!actorSite) return;
+    const actor = fold.actors.get(actorSite);
+    const target = actor ?? {
+      siteId: actorSite,
+      state: "queued" as AgentLampState,
+      lastProgressAt: now,
+      outstanding: new Map<string, AgentLampState>(),
+    };
+    if (text(payload.phaseName)) target.phaseName = text(payload.phaseName);
+    target.lastProgressAt = now;
+    if (type === "node-settled") {
+      // Node settlement is not actor settlement: while other nodes of the
+      // same actor are still in flight the lamp stays live, and only the
+      // final node's outcome makes the actor terminal.
+      target.outstanding.delete(instance);
+      if (target.outstanding.size > 0) {
+        target.state = liveStateOf(target.outstanding);
+      } else {
+        const outcome = text(payload.outcome);
+        target.state =
+          outcome === "failed"
+            ? "failed"
+            : outcome === "cancelled"
+              ? "skipped"
+              : "done";
+      }
+      if (payload.cached === true) target.cached = true;
+    } else {
+      const live = NODE_LIVE[type.slice(5)];
+      if (live) {
+        target.outstanding.set(instance, live);
+        target.state = liveStateOf(target.outstanding);
+      }
+    }
+    fold.actors.set(actorSite, target);
+  } else if (type === "usage-updated") {
+    const tokens = payload.spentTokens;
+    if (typeof tokens === "number" && Number.isFinite(tokens))
+      fold.spentTokens = tokens;
+  } else if (type === "run-settled") {
+    fold.settled = {
+      status: text(payload.status, "settled"),
+      ...(text(payload.stopReason)
+        ? { stopReason: text(payload.stopReason) }
+        : {}),
+      ...(text(record(payload.error).message)
+        ? { message: text(record(payload.error).message) }
+        : {}),
+    };
+  }
+}
+/** bb's `backgroundTask.workflow` snapshot grammar (agents + phases). */
+function workflowSnapshot(
+  fold: RunFold,
+  model: string,
+): WorkflowProgressSnapshot {
+  const actors = [...fold.actors.values()].slice(0, 50);
+  return {
+    agents: actors.map((actor, index): WorkflowAgentSnapshot => ({
+      agentType: "zcode-dynamic-workflow",
+      // bb numbers agent attempts from 1; the journal exposes no retries.
+      attempt: 1,
+      cached: actor.cached === true,
+      index: index + 1,
+      label: actor.name ?? actor.siteId,
+      lastProgressAt: actor.lastProgressAt,
+      model,
+      ...(actor.phaseName
+        ? {
+            // bb numbers phases from 1; unknown phases land before the list.
+            phaseIndex:
+              Math.max(0, fold.phaseNames.indexOf(actor.phaseName)) + 1,
+            phaseTitle: actor.phaseName,
+          }
+        : {}),
+      state: actor.state,
+    })),
+    phases: fold.phaseNames.slice(0, 24).map((title, index) => ({
+      index: index + 1,
+      title,
+    })),
+  };
+}
+
 export class BackgroundWork {
   private jobs = new Map<
     string,
@@ -363,10 +551,14 @@ export class BackgroundWork {
   private timer?: ReturnType<typeof setTimeout>;
   private reading?: Promise<void>;
   private stopped = false;
+  /** Live journal folds for dynamic-workflow runs, keyed by run id. */
+  private runs = new Map<string, RunFold>();
   constructor(
     private client: ZCodeConnection,
     private sessionId: string,
     private emit: (deltas: ThreadDelta[]) => void,
+    /** Model id for workflow agent lamps; the journal carries none per actor. */
+    private workflowModel: () => string = () => "ZCode model",
   ) {}
   get active() {
     return [...this.jobs.values()].some((j) => j.open);
@@ -396,8 +588,57 @@ export class BackgroundWork {
         .filter(Boolean)
         .join("\n")
         .slice(-8192);
-      const item: DeltaItemShape =
-        job.taskKind === "subagent"
+      // Dynamic-workflow runs surface in the projection with taskKind
+      // "workflow" (POC-verified); bb's workflow task grammar then renders
+      // live agent lamps from the journal snapshot. Bash jobs keep the
+      // generic local task row.
+      const isWorkflowRun =
+        text(job.taskKind) === "workflow" ||
+        ["CreateWorkflow", "AmendWorkflow"].includes(text(job.toolName));
+      const runFold = isWorkflowRun
+        ? (this.runs.get(id) ?? newFold())
+        : undefined;
+      if (isWorkflowRun && !this.runs.has(id)) this.runs.set(id, runFold!);
+      const workflowSummary =
+        runFold && (runFold.settled || runFold.spentTokens !== undefined)
+          ? [
+              runFold.settled
+                ? `${runFold.settled.status}${
+                    runFold.settled.stopReason
+                      ? ` (${runFold.settled.stopReason})`
+                      : ""
+                  }`
+                : "",
+              runFold.spentTokens !== undefined
+                ? `${runFold.spentTokens} tokens`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined;
+      const item: DeltaItemShape = isWorkflowRun
+        ? {
+            type: "backgroundTask",
+            familyId: this.sessionId,
+            taskType: LOCAL_WORKFLOW_TASK_TYPE,
+            description: `Dynamic workflow ${id}`,
+            skipTranscript: false,
+            status,
+            taskStatus: pending
+              ? state === "paused"
+                ? "paused"
+                : "running"
+              : status === "completed"
+                ? "completed"
+                : status === "interrupted"
+                  ? "killed"
+                  : "failed",
+            ...(workflowSummary ? { summary: workflowSummary } : {}),
+            ...(runFold && (runFold.actors.size || runFold.phaseNames.length)
+              ? { workflow: workflowSnapshot(runFold, this.workflowModel()) }
+              : {}),
+          }
+        : job.taskKind === "subagent"
           ? {
               type: "delegation",
               childRef: id,
@@ -430,20 +671,38 @@ export class BackgroundWork {
       const previous = this.jobs.get(id),
         key = { providerItemId: `zcode-work-${id}` };
       if (previous && !previous.open) continue;
+      // A terminal workflow row closes only once the journal confirms
+      // `run-settled` — or the surface is confirmed persistently
+      // unavailable (JOURNAL_FAILURE_LIMIT consecutive failures), degrading
+      // to a run-level close. A run discovered already-settled, a projection
+      // ahead of the fold, or one transient journal timeout waits one more
+      // refresh — a closed row can never be repaired.
+      const hydrating =
+        isWorkflowRun &&
+        !(
+          runFold &&
+          (runFold.settled || runFold.journalFailures >= JOURNAL_FAILURE_LIMIT)
+        );
       if (!previous) this.emit([{ kind: "item.open", key, item }]);
-      if (!pending && (!previous || previous.open))
+      if (!pending && (!previous || previous.open) && !hydrating) {
         this.emit([{ kind: "item.close", key, item, status }]);
-      else if (
-        pending &&
+        // A closed row is never repaired; drop its fold so polling stops
+        // serving (and serially blocking on) journals nobody reads.
+        if (isWorkflowRun) this.runs.delete(id);
+      } else if (
+        (pending || hydrating) &&
         previous?.open &&
         JSON.stringify(previous.item) !== JSON.stringify(item)
       )
         this.emit([{ kind: "item.progress", key, snapshot: item }]);
-      this.jobs.set(id, { job, item, open: pending });
+      this.jobs.set(id, { job, item, open: pending || hydrating });
     }
     // Keep completed deduplication bounded without evicting active work.
     for (const [id, entry] of this.jobs)
-      if (this.jobs.size > 2048 && !entry.open) this.jobs.delete(id);
+      if (this.jobs.size > 2048 && !entry.open) {
+        this.jobs.delete(id);
+        this.runs.delete(id);
+      }
     this.schedule();
   }
   private schedule() {
@@ -459,8 +718,17 @@ export class BackgroundWork {
   refresh() {
     if (this.stopped) return Promise.resolve();
     if (!this.reading)
-      this.reading = this.client
-        .request("session/read", { sessionId: this.sessionId })
+      this.reading = this.pullWorkflowEvents()
+        .then(() =>
+          // Status polls are read-only: a timeout retries next refresh
+          // instead of killing the shared CLI session.
+          this.client.request(
+            "session/read",
+            { sessionId: this.sessionId },
+            undefined,
+            true,
+          ),
+        )
         .then((raw) => {
           this.update(record(raw).projection);
         })
@@ -468,6 +736,59 @@ export class BackgroundWork {
           this.reading = undefined;
         });
     return this.reading;
+  }
+  /**
+   * Cursor-paged journal reads per open run. Pages are drained before the
+   * following `session/read` can observe the run as settled - closing on a
+   * half-folded journal would freeze stale lamps. A run whose journal is
+   * done stops pulling; a CLI without the v4 surface degrades to run-level
+   * rows.
+   */
+  private async pullWorkflowEvents() {
+    for (const [runId, fold] of this.runs) {
+      // Closed rows (degraded or settled) are never repaired; skip their
+      // folds so a dead journal cannot block live runs' refreshes.
+      const tracked = this.jobs.get(runId);
+      if (tracked && !tracked.open) continue;
+      if (fold.settled) continue;
+      try {
+        // The cap guards a runaway journal; the cursor resumes next refresh.
+        for (let page = 0; page < 25; page++) {
+          const reply = record(
+            await this.client.request(
+              "v4/conversation/workflowRunEvents",
+              {
+                sessionId: this.sessionId,
+                runId,
+                ...(fold.afterSequence >= 0
+                  ? { afterSequence: fold.afterSequence }
+                  : {}),
+                limit: 200,
+              },
+              5000,
+              // Journal reads are idempotent polls: a timeout feeds the
+              // failure-streak retry instead of failing the CLI session.
+              true,
+            ),
+          );
+          const events = Array.isArray(reply.events)
+            ? reply.events.map(record)
+            : [];
+          for (const event of events) foldRunEvent(fold, event);
+          const last = events.at(-1);
+          if (last && typeof last.sequence === "number")
+            fold.afterSequence = last.sequence;
+          if (reply.hasMore !== true || events.length === 0) break;
+        }
+        // Only a completed pull clears the failure streak.
+        fold.journalFailures = 0;
+      } catch {
+        // Count consecutive failures: one transient timeout keeps the row
+        // open for a retry; reaching the limit marks the surface
+        // unavailable and allows a degraded run-level close.
+        fold.journalFailures += 1;
+      }
+    }
   }
   close(status: "failed" | "interrupted") {
     this.stopped = true;

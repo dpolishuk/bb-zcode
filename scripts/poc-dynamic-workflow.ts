@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ZCodeClient, ProtocolError, type Frame } from "../src/client.js";
 import { resolveLaunch, workspaceRef } from "../src/launch.js";
-import { RUNTIME_PREFERENCES, record } from "../src/protocol.js";
+import { RUNTIME_PREFERENCES, record, text } from "../src/protocol.js";
 
 const root = mkdtempSync(join(tmpdir(), "bb-zcode-dwf-poc-"));
 const cwd = join(root, "workspace");
@@ -84,6 +84,10 @@ const modelServer = createServer(async (request, response) => {
         ? "TWO_OK"
         : "WF_POC_MAIN_DONE";
 
+  // Child-agent turns are delayed so the stage 9 v2 probes can observe the
+  // run while it is still active (running rows, live workspace nodes).
+  if (!allText.includes("BB_WF_POC"))
+    await new Promise((resolve) => setTimeout(resolve, 6000));
   await new Promise((resolve) => setTimeout(resolve, 50));
   response.writeHead(200, { "content-type": "text/event-stream" });
   const event = (type: string, data: unknown) =>
@@ -365,6 +369,76 @@ const runTerminal = async (): Promise<Record<string, unknown> | undefined> => {
   }
 };
 
+/**
+ * Stage 9 v2 probes: while the run is active, capture (a) the session
+ * projection's backgroundJobs (does a dynamic run surface there, and with
+ * which fields?) and (b) the v4 conversation pulls the bridge could use for
+ * per-step lamps (workflowRuns rows + workflowRunWorkspace nodes).
+ */
+const seenRunIds = new Set<string>();
+const probe = async () => {
+  try {
+    const read = record(
+      await client.request("session/read", { sessionId }, 5000),
+    );
+    log("probe.backgroundJobs", record(read.projection).backgroundJobs);
+  } catch (error) {
+    log("probe.sessionRead.error", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    const v4runs = record(
+      await client.request(
+        "v4/conversation/workflowRuns",
+        { sessionId, limit: 10 },
+        5000,
+      ),
+    );
+    log("probe.v4.workflowRuns", v4runs);
+    const rows = Array.isArray(v4runs.runs) ? v4runs.runs.map(record) : [];
+    for (const row of rows) {
+      const runId = text(row.runId);
+      if (!runId || seenRunIds.has(runId)) continue;
+      seenRunIds.add(runId);
+      try {
+        log(
+          "probe.v4.workflowRunWorkspace",
+          await client.request(
+            "v4/conversation/workflowRunWorkspace",
+            { sessionId, runId },
+            5000,
+          ),
+        );
+      } catch (error) {
+        log("probe.v4.workflowRunWorkspace.error", {
+          runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        log(
+          "probe.v4.workflowRunEvents",
+          await client.request(
+            "v4/conversation/workflowRunEvents",
+            { sessionId, runId, limit: 80 },
+            5000,
+          ),
+        );
+      } catch (error) {
+        log("probe.v4.workflowRunEvents.error", {
+          runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  } catch (error) {
+    log("probe.v4.workflowRuns.error", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 let terminalRun: Record<string, unknown> | undefined;
 const deadline = Date.now() + 240_000;
 while (Date.now() < deadline) {
@@ -373,9 +447,11 @@ while (Date.now() < deadline) {
     if (terminal) break; // turn ended without a workflow call — stop early.
     continue;
   }
+  await probe();
   terminalRun = await runTerminal();
   if (terminalRun) break;
 }
+await probe();
 await runTerminal();
 if (terminal) log("turn.terminal", terminal);
 log("poc.summary", {
@@ -392,6 +468,11 @@ log("poc.summary", {
   terminalRunStatus: terminalRun?.status ?? null,
 });
 await client.close();
+// The listening model server pins the Node event loop; without this the
+// finished POC process lingers forever and the surrounding background task
+// never completes.
+modelServer.closeAllConnections?.();
+await new Promise<void>((resolve) => modelServer.close(() => resolve()));
 if (!terminalRun)
   throw new Error(
     `POC did not reach a terminal workflow run (turn: ${JSON.stringify(terminal?.resultType ?? "none")}).`,

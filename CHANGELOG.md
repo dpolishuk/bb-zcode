@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.14.0 — 2026-10-27
+
+- Close roadmap stage 9 with live run tracking and the bb-side surfaces
+  (v2). While a dynamic workflow runs, the bridge now emits a native
+  `backgroundTask` row (`local_workflow`) instead of leaving the closed
+  CreateWorkflow row as the only trace: the run appears in the session
+  projection's background jobs (POC-verified on CLI 0.17.0 - `taskKind
+"workflow"`, cancellable while running), and per-refresh cursor-paged
+  reads of `v4/conversation/workflowRunEvents` fold the run journal into
+  bb's workflow snapshot grammar - live per-agent lamps (queued/running/
+  done/failed/skipped) with phase titles, and an honest terminal summary
+  (`status (stopReason) · N tokens`). The journal is the same source the
+  Desktop consumes; if the surface is missing the row degrades to
+  run-level status only.
+- A workflows hub and a per-thread run pane join the frontend: the sidebar
+  `Workflows` panel and the thread panel action both list persisted run
+  history (status, tokens, updated time, artifact chips) through a new
+  `workflowRuns` RPC. The handler resolves the thread/project checkout via
+  the bb SDK and cold-reads `workflows/runs` with a short-lived sessionless
+  CLI process - the store outlives any thread, so history lists cross-thread;
+  reads are single-flight with a 3 s TTL because a spawn is the cost.
+- Verification: POC probes captured mid-run `backgroundJobs` rows and the
+  journal event grammar (`run-launched`/`actor-created`/`node-*`/`usage-
+updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
+  no nodes for ask-only scripts, so lamps fold from journal events instead.
+  14 background/foundation tests cover the fold, the degraded path and the
+  reader; full `npm run check` and the live CLI smoke (`RUNTIME_VERIFIED`)
+  pass. Note: `threadPanelAction` is retired in newer SDK typings (still
+  supported); migrating to `experimental_tab` needs an SDK bump and stays
+  follow-up work.
+- The dynamic-workflow POC script now closes its loopback model server and
+  exits on its own after printing the summary; the open listener used to pin
+  the Node event loop, so a finished POC process lingered and its surrounding
+  background task stayed "running" indefinitely.
+- Review fixes (Codex P2 findings): journal pages are drained while
+  `hasMore` is true before a settled run can close its row (25-page guard,
+  cursor resumes next refresh); an actor's lamp tracks its in-flight nodes,
+  so a second ask reactivates a `done` agent instead of lying that it
+  finished; the run-history reader keys its single-flight and TTL cache by
+  workspace and limit so concurrent hub/pane reads never cross workspaces;
+  and a nested workflow row keeps its saved `parentRef` when the result
+  event omits the attribution. A second review pass added: journal identity
+  keys include the `ordinal` (fan-out runs reuse a siteId across runtime
+  instances), and a run discovered already-settled now waits for one journal
+  pull before closing, so its row carries lamps and final usage instead of
+  an empty fold. A third pass tightened the terminal close to wait for the
+  journal's `run-settled` (not merely a pull attempt): a projection that
+  reports completion while the fold still shows running agents holds the row
+  open one more refresh instead of freezing stale lamps. A fourth pass made
+  the degraded close require three consecutive journal failures, so a single
+  transient timeout retries on the next refresh instead of closing the row
+  without lamps or usage. Because a real transport timeout used to kill the
+  whole CLI session (`fail()` + `close()`), `ZCodeClient.request` gained a
+  read-only mode: journal and `session/read` polls time out non-fatally
+  (the late reply is dropped), while mutating requests keep the fail-fast
+  behavior. Follow-ups from the same pass: a closed workflow row drops its
+  fold so polling stops serving (and serially blocking on) journals nobody
+  reads, and the sessionless run reader rejects reverse host requests
+  asynchronously — a synchronous throw escaped the transport's stdout
+  handler instead of becoming the denial reply.
+
+## 0.13.0 — 2026-10-27
+
+- Render dynamic workflows in the timeline (roadmap stage 9, v1). The
+  bridge now maps `CreateWorkflow` onto the plugin's own extension item
+  (`zcode/workflow-graph`): the row opens with the script's title while the
+  native tool runs, and closes carrying the `causalityGraph` from the
+  `create_workflow` display payload plus the run id and editable script
+  path picked out of the result text. Payloads are validated at ingest
+  against a declared zod schema (`extensionKinds` registration).
+- The plugin's first frontend bundle (`app.tsx`, built into `dist/app.js`)
+  registers an `experimental_timelineRenderer` for that kind and draws the
+  ZCode timeline language: a rail with phase stations, subagent pills under
+  their station, control-flow arcs above the rail (dashed for back edges),
+  exit markers and hole diamonds, in `currentColor` so it follows the bb
+  theme. An upstream-truncated graph or a missing one keeps the honest
+  fallback - the declarative base only - because half a phase picture
+  would lie. `react`/`@types/react` are type-only devDependencies (bb
+  shims React at runtime).
+- Live per-step lamps, the run pane and a workflows hub remain future
+  work: they need a native run-status event stream (the bridge's
+  `backgroundTask.workflow` snapshot grammar is ready for it).
+
 ## 0.12.0 — 2026-10-27
 
 - Open ZCode's native dynamic workflows to plugin sessions (roadmap stage

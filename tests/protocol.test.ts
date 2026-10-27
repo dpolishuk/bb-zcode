@@ -196,10 +196,12 @@ it("passes executable arguments as an argv array without a shell", () => {
   expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
 });
 it("only imports public SDK surfaces and declared dependencies", async () => {
-  // cron-parser is the one declared runtime dependency beyond the SDK's
-  // fixed allowlist; it computes automation schedules in src/automations.ts.
+  // Beyond the SDK's fixed allowlist: cron-parser computes automation
+  // schedules in src/automations.ts, and app.tsx imports react hooks at
+  // runtime - the bb app bundle build shims react from the shared plugin
+  // runtime (globalThis.__bbPluginRuntime.react), never from node_modules.
   const scan = await experimental_scanPublicSdkOnly(process.cwd(), {
-    allow: [/^cron-parser$/u],
+    allow: [/^cron-parser$/u, /^react$/u],
   });
   expect(scan.violations).toEqual([]);
   expect(scan.privateDependencies).toEqual([]);
