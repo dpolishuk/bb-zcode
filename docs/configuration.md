@@ -11,6 +11,7 @@
 | `nativeSearchEnhancementsEnabled` | `false`     | Enable native enhanced find/grep in new sessions                                               |
 | `bbToolsEnabled`                  | `false`     | Enable the bb tool bridge; overrides native CLI MCP server list                                |
 | `automationsEnabled`              | `false`     | Let sessions create scheduled tasks (Cron tools) and run them while bb is open                 |
+| `offPeakTasksEnabled`             | `false`     | Let sessions queue idle-time (off-peak) tasks; runs consume Coding Plan quota                  |
 | `subagents`                       | Empty       | JSON native subagent snapshot; empty inherits native configuration                             |
 | `mcpServers`                      | `[]`        | JSON array of native MCP server definitions; empty inherits CLI settings when bb tools are off |
 
@@ -64,8 +65,41 @@ runs schedules itself:
 
 Manage tasks from any idle ZCode session with `/zcode-automations` (list
 with next runs) and `/zcode-automation-delete <id>`. With the setting off,
-the Cron tools stay hidden from the model entirely. Off-Peak tasks remain
-unsupported (their tool is not registered).
+the Cron tools stay hidden from the model entirely.
+
+## Idle-time (off-peak) tasks
+
+Enable `offPeakTasksEnabled` to let ZCode sessions queue idle-time tasks
+through the native `OffPeakCreate`/`OffPeakList` tools. Unlike scheduled
+tasks, the queue lives on the Z.ai server: creating a task takes a ticket,
+the plugin polls its status, and when the server marks it ready the task
+runs unattended in this bb:
+
+- Requires an existing desktop sign-in with an **individual Coding Plan**
+  (Z.ai or BigModel); the runs themselves execute through the plan's idle
+  window and consume its quota. The server rejects ineligible plans with a
+  typed error the model relays at creation time.
+- A ready task dispatches into the session that created it with the plan's
+  hidden idle-time model: the plugin passes the ticket, plan credentials and
+  model per run, and hides `CronCreate`/`OffPeakCreate` for the run so a
+  background task cannot queue more work. The reply streams into the same bb
+  thread.
+- When the execution window expires mid-run (server code 3102) the task
+  requeues automatically, takes a new ticket and continues the same session
+  from where it left off. Three consecutive failures park it as `failed`;
+  busy bound threads defer with backoff.
+- Nothing happens while bb is closed - like ZCode Desktop, there is no
+  window to miss; polling resumes on the next start. Tasks are
+  workspace-scoped in `offpeak.json` (separate from automations, like the
+  native tables).
+- v1 limits: tasks need an explicit `model` at creation (the tool normally
+  sends one; a task without it fails with guidance instead of guessing), and
+  pause/continue are not exposed - `/zcode-offpeak` lists tasks and
+  `/zcode-offpeak-cancel <id>` cancels one.
+
+The gateway wire API is undocumented upstream and can change; the plugin
+follows the open-source reference implementation and pins it in
+`knowledge/contracts/off-peak-protocol.md`.
 
 ## Models
 

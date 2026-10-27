@@ -1,0 +1,1016 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import { z } from "zod";
+import { ProtocolError } from "./client.js";
+import { record } from "./protocol.js";
+
+// Upstream off-peak contract mirrored from @zcode/shared and
+// packages/services on upstream main (pinned 2026-10-24; see
+// knowledge/contracts/off-peak-protocol.md). The wire API is not a public
+// contract and can change without notice.
+export const OFF_PEAK_METHODS = new Set(["offPeak/create", "offPeak/list"]);
+
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+// The CLI denies these tools on off-peak turns; OffPeakList stays visible.
+export const OFF_PEAK_RUN_TOOL_DENYLIST = ["CronCreate", "OffPeakCreate"];
+
+export const OFF_PEAK_CONTINUATION_PROMPT =
+  "Continue the previous task from where it left off. The run was interrupted " +
+  "(app restart or execution window expired). Do not start over; review what has " +
+  "already been done and complete the remaining work.";
+
+const permissionModeSchema = z.enum([
+  "build",
+  "edit",
+  "plan",
+  "yolo",
+  "guarded",
+]);
+
+const taskStatusSchema = z.enum([
+  "queued",
+  "paused",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export const offPeakTaskSnapshotSchema = z
+  .object({
+    offPeakTaskId: z.string().min(1),
+    title: z.string(),
+    status: taskStatusSchema,
+    queuePosition: z.number().int().positive().optional(),
+    sessionId: z.string().min(1).optional(),
+    createdAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type OffPeakTaskSnapshot = z.infer<typeof offPeakTaskSnapshotSchema>;
+
+const createParamsSchema = z
+  .object({
+    title: z.string().min(1),
+    prompt: z.string().min(1),
+    permissionMode: permissionModeSchema.optional(),
+    model: z.string().min(1).optional(),
+    thoughtLevel: z.string().min(1).optional(),
+    boundSessionId: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const createFailureSchema = z.object({
+  ok: z.literal(false),
+  failureStage: z.enum([
+    "client_validation",
+    "ticket_request",
+    "local_persist",
+  ]),
+  errorCategory: z.enum([
+    "client_validation",
+    "eligibility_3101",
+    "quota_3103",
+    "network",
+    "invalid_response",
+    "local_persist",
+    "unknown",
+  ]),
+  errorCode: z.string(),
+});
+export type OffPeakCreateFailure = z.infer<typeof createFailureSchema>;
+
+const storedFieldsSchema = z.object({
+  prompt: z.string().min(1),
+  status: taskStatusSchema,
+  createdAt: z.number().int().nonnegative(),
+  queuePosition: z.number().int().positive().optional(),
+  boundSessionId: z.string().min(1),
+  threadId: z.string().min(1),
+  workspacePath: z.string().min(1),
+  providerOptions: z.unknown().optional(),
+  permissionMode: permissionModeSchema.optional(),
+  model: z.string().min(1).optional(),
+  thoughtLevel: z.string().min(1).optional(),
+  serverTicketId: z.string().min(1).optional(),
+  schedulable: z.boolean(),
+  nextPollAt: z.number().int().optional(),
+  nextDispatchAt: z.number().int().optional(),
+  ranOnce: z.boolean().optional(),
+  deferred: z.number().int().nonnegative().optional(),
+  transientFailures: z.number().int().nonnegative().optional(),
+  settled: z.boolean().optional(),
+  failureReason: z.string().optional(),
+  startedAt: z.number().int().optional(),
+  endedAt: z.number().int().optional(),
+  updatedAt: z.number().int(),
+});
+
+export type StoredOffPeakTask = {
+  offPeakTaskId: string;
+  title: string;
+} & z.infer<typeof storedFieldsSchema>;
+
+const storeFileSchema = z.object({
+  version: z.literal(1),
+  tasks: z.array(
+    z
+      .object({ offPeakTaskId: z.string().min(1), title: z.string() })
+      .and(storedFieldsSchema),
+  ),
+});
+
+/** Typed gateway error; callers branch on bizCode (3101/3103/3102/3006/3105). */
+export class OffPeakServerError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number,
+    readonly bizCode?: number,
+    readonly nextTakeAt?: number,
+  ) {
+    super(message);
+    this.name = "OffPeakServerError";
+  }
+}
+
+export type OffPeakTicketState =
+  "queued" | "ready" | "active" | "expired" | "settled" | "not_found";
+
+export interface OffPeakServerClient {
+  takeTicket(taskId: string): Promise<{
+    ticketId: string;
+    state: OffPeakTicketState;
+    position?: number;
+    nextPollAfterMs?: number;
+    registeredAt: number;
+  }>;
+  batchStatus(ticketIds: string[]): Promise<{
+    nextPollAfterMs?: number;
+    tickets: Array<{
+      ticketId: string;
+      state: OffPeakTicketState;
+      position?: number;
+      activeDeadline?: number;
+    }>;
+  }>;
+  settle(ticketId: string): Promise<void>;
+}
+
+export interface OffPeakCredentials {
+  jwt: string;
+  codingPlanApiKey: string;
+}
+
+const ticketStateSchema = z.enum([
+  "queued",
+  "ready",
+  "active",
+  "expired",
+  "settled",
+  "not_found",
+]);
+const errorBodySchema = z
+  .object({
+    code: z.number().optional(),
+    msg: z.string().optional(),
+    message: z.string().optional(),
+    next_take_at: z.number().optional(),
+    data: z
+      .object({ next_take_at: z.number().int().positive().optional() })
+      .passthrough()
+      .nullish(),
+  })
+  .passthrough();
+
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** Wire client for the four JSON endpoints; messages calls stay in the CLI. */
+export function createOffPeakServerClient(deps: {
+  resolveOrigin: () => string | Promise<string>;
+  resolveCredentials: () => Promise<OffPeakCredentials>;
+  fetchImpl?: typeof fetch;
+}): OffPeakServerClient {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  async function request(
+    method: "GET" | "POST",
+    suffix: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const credentials = await deps.resolveCredentials();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const origin = await deps.resolveOrigin();
+      const response = await fetchImpl(
+        `${origin.replace(/\/$/, "")}/api/v1/off-peak${suffix}`,
+        {
+          method,
+          headers: {
+            ...(body === undefined
+              ? {}
+              : { "content-type": "application/json" }),
+            authorization: `Bearer ${credentials.jwt}`,
+            "x-coding-plan-api-key": credentials.codingPlanApiKey,
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: controller.signal,
+        },
+      );
+      const text = await response.text();
+      const json: unknown = text
+        ? (JSON.parse(text) as unknown)
+        : ({} as unknown);
+      if (!response.ok) {
+        const parsed = errorBodySchema.safeParse(json);
+        const errorBody = parsed.success ? parsed.data : {};
+        throw new OffPeakServerError(
+          errorBody.msg ??
+            errorBody.message ??
+            `off-peak gateway ${response.status}`,
+          response.status,
+          errorBody.code,
+          errorBody.next_take_at ?? errorBody.data?.next_take_at,
+        );
+      }
+      return json;
+    } catch (failure) {
+      if (failure instanceof OffPeakServerError) throw failure;
+      throw new OffPeakServerError(
+        failure instanceof Error ? failure.message : String(failure),
+        0,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    async takeTicket(taskId) {
+      const body = record(
+        await request("POST", "/ticket", { task_id: taskId }),
+      );
+      const state = ticketStateSchema.parse(body.state);
+      return {
+        ticketId: z.string().min(1).parse(body.ticket_id),
+        state,
+        ...(body.position === null || body.position === undefined
+          ? {}
+          : {
+              position: z.number().int().nonnegative().parse(body.position) + 1,
+            }),
+        ...(body.next_poll_after === undefined
+          ? {}
+          : { nextPollAfterMs: z.number().parse(body.next_poll_after) * 1000 }),
+        registeredAt: Date.now(),
+      };
+    },
+    async batchStatus(ticketIds) {
+      const body = record(
+        await request("POST", "/ticket/status", { ticket_ids: ticketIds }),
+      );
+      const tickets = Array.isArray(body.tickets)
+        ? body.tickets.map(record)
+        : [];
+      return {
+        ...(body.next_poll_after === undefined
+          ? {}
+          : { nextPollAfterMs: z.number().parse(body.next_poll_after) * 1000 }),
+        tickets: tickets.map((entry) => ({
+          ticketId: z.string().min(1).parse(entry.ticket_id),
+          state: ticketStateSchema.parse(entry.state),
+          ...(entry.position === null || entry.position === undefined
+            ? {}
+            : { position: z.number().parse(entry.position) + 1 }),
+          ...(entry.active_deadline === undefined
+            ? {}
+            : { activeDeadline: z.number().parse(entry.active_deadline) }),
+        })),
+      };
+    },
+    async settle(ticketId) {
+      await request("POST", `/ticket/${encodeURIComponent(ticketId)}/settle`);
+    },
+  };
+}
+
+function classifyCreateFailure(
+  error: unknown,
+  failureStage: "client_validation" | "ticket_request" | "local_persist",
+): OffPeakCreateFailure {
+  let errorCategory: OffPeakCreateFailure["errorCategory"] = "unknown";
+  let errorCode = "";
+  if (failureStage === "client_validation") errorCategory = "client_validation";
+  else if (failureStage === "local_persist") errorCategory = "local_persist";
+  else if (error instanceof OffPeakServerError) {
+    errorCode = error.bizCode === undefined ? "" : String(error.bizCode);
+    if (error.bizCode === 3101) errorCategory = "eligibility_3101";
+    else if (error.bizCode === 3103) errorCategory = "quota_3103";
+    else if (error.httpStatus === 0) errorCategory = "network";
+    else errorCategory = "invalid_response";
+  } else errorCategory = "network";
+  return { ok: false, failureStage, errorCategory, errorCode };
+}
+
+export const OFF_PEAK_SYNC_MIN_MS = 5_000;
+export const OFF_PEAK_SYNC_MAX_MS = 5 * 60_000;
+
+/**
+ * Off-peak task host: creation/list reverse RPCs, ticket sync loop and
+ * dispatch claims over a local JSON store (separate from automations, like
+ * the native separate tables).
+ */
+export function createOffPeakService(options: {
+  storeDir?: string;
+  now?: () => Date;
+  client: OffPeakServerClient;
+}) {
+  const now = options.now ?? (() => new Date());
+  const client = options.client;
+  const storeDir =
+    options.storeDir ??
+    process.env.BB_BRIDGE_DIR ??
+    path.join(homedir(), ".bb", "plugins", "zcode", "bridge-data");
+  const storePath = path.join(storeDir, "offpeak.json");
+  let loaded: StoredOffPeakTask[] | undefined;
+  let loading: Promise<void> | undefined;
+  let writes: Promise<void> = Promise.resolve();
+  const dispatching = new Set<string>();
+  // Synchronous create-in-flight reservations (create/create race guard).
+  const creating = new Set<string>();
+  // In-flight ticket retakes per task (orphan-ticket guard).
+  const retaking = new Set<string>();
+
+  function load(): Promise<void> {
+    loading ??= (async () => {
+      let raw: string;
+      try {
+        raw = await readFile(storePath, "utf8");
+      } catch (failure) {
+        if (
+          typeof failure === "object" &&
+          failure !== null &&
+          (failure as { code?: unknown }).code === "ENOENT"
+        ) {
+          loaded = [];
+          return;
+        }
+        throw failure;
+      }
+      // Fail closed on a damaged store (same rationale as automations).
+      const tasks = storeFileSchema.parse(JSON.parse(raw)).tasks;
+      // Interrupted-run recovery, like the native host: a `running` row
+      // means the worker died mid-run - requeue it and keep ranOnce so the
+      // next dispatch continues the session instead of repeating the
+      // original prompt and burning quota again.
+      const recovered = tasks.map((task) =>
+        task.status === "running"
+          ? { ...task, status: "queued" as const, schedulable: false }
+          : task,
+      );
+      loaded = recovered;
+      if (recovered.some((task, index) => task !== tasks[index]))
+        void persist(recovered).catch(() => undefined);
+    })();
+    return loading;
+  }
+
+  function persist(next: StoredOffPeakTask[]): Promise<void> {
+    const attempt = writes.then(async () => {
+      await mkdir(storeDir, { recursive: true });
+      const tmp = `${storePath}.${randomUUID()}.tmp`;
+      await writeFile(
+        tmp,
+        JSON.stringify({ version: 1, tasks: next }, null, 2),
+        "utf8",
+      );
+      await rename(tmp, storePath);
+    });
+    writes = attempt.catch(() => undefined);
+    return attempt;
+  }
+
+  async function mutate(
+    id: string,
+    apply: (task: StoredOffPeakTask) => StoredOffPeakTask,
+  ): Promise<StoredOffPeakTask | undefined> {
+    await load();
+    const current = loaded!.find((t) => t.offPeakTaskId === id);
+    if (!current) return undefined;
+    const next = { ...apply(current), updatedAt: now().getTime() };
+    loaded = loaded!.map((t) => (t.offPeakTaskId === id ? next : t));
+    await persist(loaded);
+    return next;
+  }
+
+  function snapshot(t: StoredOffPeakTask): OffPeakTaskSnapshot {
+    return offPeakTaskSnapshotSchema.parse({
+      offPeakTaskId: t.offPeakTaskId,
+      title: t.title,
+      status: t.status,
+      ...(t.queuePosition !== undefined && t.queuePosition !== null
+        ? { queuePosition: t.queuePosition }
+        : {}),
+      ...(t.status !== "queued" || t.ranOnce
+        ? { sessionId: t.boundSessionId }
+        : {}),
+      createdAt: t.createdAt,
+    });
+  }
+
+  async function create(
+    raw: unknown,
+    context: {
+      threadId: string;
+      providerThreadId: string;
+      cwd: string;
+      providerOptions?: unknown;
+    },
+  ): Promise<{ ok: true; task: OffPeakTaskSnapshot } | OffPeakCreateFailure> {
+    const input = createParamsSchema.parse(raw);
+    await load();
+    // One non-terminal task per bound session, checked before taking a
+    // ticket so refusals do not burn quota. The synchronous reservation
+    // closes the create/create race: two concurrent requests for the same
+    // session must not both pass the check and take tickets.
+    const boundSessionId = input.boundSessionId ?? context.providerThreadId;
+    const reservationKey = `${context.cwd}\u0000${boundSessionId}`;
+    const bound =
+      creating.has(reservationKey) ||
+      loaded!.some(
+        (t) =>
+          t.boundSessionId === boundSessionId &&
+          !TERMINAL_STATUSES.has(t.status) &&
+          t.workspacePath === context.cwd,
+      );
+    if (bound)
+      return {
+        ok: false,
+        failureStage: "client_validation",
+        errorCategory: "client_validation",
+        errorCode: "session_bound",
+      };
+    creating.add(reservationKey);
+    try {
+      return await createReserved(input, context, boundSessionId);
+    } finally {
+      creating.delete(reservationKey);
+    }
+  }
+
+  async function createReserved(
+    input: z.infer<typeof createParamsSchema>,
+    context: {
+      threadId: string;
+      providerThreadId: string;
+      cwd: string;
+      providerOptions?: unknown;
+    },
+    boundSessionId: string,
+  ): Promise<{ ok: true; task: OffPeakTaskSnapshot } | OffPeakCreateFailure> {
+    const offPeakTaskId = `offpeak-${randomUUID()}`;
+    let ticket;
+    try {
+      ticket = await client.takeTicket(offPeakTaskId);
+    } catch (failure) {
+      if (failure instanceof ProtocolError) throw failure;
+      return classifyCreateFailure(failure, "ticket_request");
+    }
+    const at = now().getTime();
+    const entry: StoredOffPeakTask = {
+      offPeakTaskId,
+      title: input.title,
+      prompt: input.prompt,
+      status: "queued",
+      createdAt: at,
+      boundSessionId,
+      threadId: context.threadId,
+      workspacePath: context.cwd,
+      ...(context.providerOptions !== undefined
+        ? { providerOptions: context.providerOptions }
+        : {}),
+      ...(input.permissionMode ? { permissionMode: input.permissionMode } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.thoughtLevel ? { thoughtLevel: input.thoughtLevel } : {}),
+      serverTicketId: ticket.ticketId,
+      schedulable: ticket.state === "ready",
+      ...(ticket.nextPollAfterMs !== undefined
+        ? {
+            nextPollAt:
+              at +
+              Math.min(
+                Math.max(ticket.nextPollAfterMs, OFF_PEAK_SYNC_MIN_MS),
+                OFF_PEAK_SYNC_MAX_MS,
+              ),
+          }
+        : {}),
+      ...(ticket.position !== undefined
+        ? { queuePosition: ticket.position }
+        : {}),
+      updatedAt: at,
+    };
+    loaded = [...loaded!, entry];
+    try {
+      await persist(loaded);
+    } catch (failure) {
+      // A creation the caller saw as rejected must never dispatch: drop
+      // the in-memory entry so housekeeping cannot pick it up, AND queue
+      // the corrected snapshot - an already-queued overlapping write still
+      // contains the rejected task and would resurrect it on disk.
+      loaded = loaded!.filter((t) => t.offPeakTaskId !== offPeakTaskId);
+      void persist(loaded).catch(() => undefined);
+      return classifyCreateFailure(failure, "local_persist");
+    }
+    return { ok: true, task: snapshot(entry) };
+  }
+
+  async function list(cwd: string): Promise<{ tasks: OffPeakTaskSnapshot[] }> {
+    await load();
+    return {
+      tasks: loaded!.filter((t) => t.workspacePath === cwd).map(snapshot),
+    };
+  }
+
+  async function handle(
+    method: string,
+    raw: unknown,
+    context: {
+      threadId?: string;
+      providerThreadId?: string;
+      cwd?: string;
+      providerOptions?: unknown;
+    },
+  ): Promise<unknown> {
+    if (method === "offPeak/list") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return list(context.cwd);
+    }
+    if (method === "offPeak/create") {
+      if (!context.threadId || !context.providerThreadId || !context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return create(raw, {
+        threadId: context.threadId,
+        providerThreadId: context.providerThreadId,
+        cwd: context.cwd,
+        providerOptions: context.providerOptions,
+      });
+    }
+    throw new ProtocolError(`Unknown off-peak method ${method}.`, -32601);
+  }
+
+  /** One batch sync pass: apply ticket states, re-take expired, settle finals. */
+  async function syncCycle(): Promise<void> {
+    await load();
+    const active = loaded!.filter(
+      (t) => !TERMINAL_STATUSES.has(t.status) && t.serverTicketId,
+    );
+    const settleOutbox = loaded!.filter(
+      (t) =>
+        TERMINAL_STATUSES.has(t.status) &&
+        t.settled !== true &&
+        t.serverTicketId,
+    );
+    await Promise.allSettled(
+      settleOutbox.map(async (task) => {
+        await client.settle(task.serverTicketId!);
+        await mutate(task.offPeakTaskId, (t) => ({ ...t, settled: true }));
+      }),
+    );
+    if (!active.length) return;
+    const due = active.filter(
+      (t) => t.nextPollAt === undefined || t.nextPollAt <= now().getTime(),
+    );
+    if (!due.length) return;
+    // The gateway caps ticket_ids at 100 per batch request; poll in chunks
+    // and apply each response only to its own chunk - a response's ticket
+    // map covers just the ids that were asked for.
+    for (let i = 0; i < due.length; i += 100) {
+      const chunk = due.slice(i, i + 100);
+      try {
+        const result = await client.batchStatus(
+          chunk.map((t) => t.serverTicketId!),
+        );
+        await applyTicketStatuses(result, chunk);
+      } catch {
+        // Transient gateway failure: retry this chunk on the next tick.
+        const backoff = now().getTime() + 30_000;
+        await Promise.allSettled(
+          chunk.map((t) =>
+            mutate(t.offPeakTaskId, (task) => ({
+              ...task,
+              nextPollAt: backoff,
+            })),
+          ),
+        );
+      }
+    }
+  }
+
+  async function applyTicketStatuses(
+    result: Awaited<ReturnType<OffPeakServerClient["batchStatus"]>>,
+    due: StoredOffPeakTask[],
+  ): Promise<void> {
+    const byTicket = new Map(result.tickets.map((t) => [t.ticketId, t]));
+    for (const task of due) {
+      const ticket = byTicket.get(task.serverTicketId!);
+      const nextPoll =
+        result.nextPollAfterMs === undefined
+          ? undefined
+          : now().getTime() +
+            Math.min(
+              Math.max(result.nextPollAfterMs, OFF_PEAK_SYNC_MIN_MS),
+              OFF_PEAK_SYNC_MAX_MS,
+            );
+      // A delayed response may race a 3102 requeue that already replaced
+      // the task's ticket: applying the old ticket's state would mark the
+      // replacement schedulable before the gateway grants it. Only touch
+      // tasks that still hold the ticket this response was polled for.
+      const holdsPolledTicket = (t: StoredOffPeakTask) =>
+        t.serverTicketId === task.serverTicketId;
+      if (!ticket) {
+        // not_found tickets are re-taken like expired ones.
+        await retake(task, nextPoll);
+        continue;
+      }
+      if (ticket.state === "ready" || ticket.state === "active") {
+        await mutate(task.offPeakTaskId, (t) =>
+          holdsPolledTicket(t)
+            ? {
+                ...t,
+                schedulable: t.status === "queued",
+                ...(ticket.position !== undefined
+                  ? { queuePosition: ticket.position }
+                  : {}),
+                ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
+              }
+            : t,
+        );
+      } else if (ticket.state === "expired" || ticket.state === "not_found") {
+        // Explicitly vanished tickets re-enter the queue like expired ones.
+        await retake(task, nextPoll);
+      } else {
+        await mutate(task.offPeakTaskId, (t) =>
+          holdsPolledTicket(t)
+            ? {
+                ...t,
+                ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
+              }
+            : t,
+        );
+      }
+    }
+  }
+
+  async function retake(
+    task: StoredOffPeakTask,
+    nextPoll?: number,
+  ): Promise<void> {
+    if (task.status === "paused" || TERMINAL_STATUSES.has(task.status)) return;
+    // Single-flight per task: a 3102 requeue and a concurrent status poll
+    // can both decide to retake; the gateway take is not documented as
+    // idempotent, so a second in-flight take would strand an orphan ticket.
+    if (retaking.has(task.offPeakTaskId)) return;
+    retaking.add(task.offPeakTaskId);
+    try {
+      await retakeExclusive(task, nextPoll);
+    } finally {
+      retaking.delete(task.offPeakTaskId);
+    }
+  }
+
+  async function retakeExclusive(
+    task: StoredOffPeakTask,
+    nextPoll?: number,
+  ): Promise<void> {
+    // The caller may hold a stale snapshot (e.g. a delayed status poll for a
+    // ticket a concurrent 3102 requeue already replaced): verify the stored
+    // task still holds this ticket before consuming a new one.
+    const current = await find(task.offPeakTaskId);
+    if (
+      !current ||
+      current.serverTicketId !== task.serverTicketId ||
+      current.status === "paused" ||
+      TERMINAL_STATUSES.has(current.status)
+    )
+      return;
+    try {
+      const ticket = await client.takeTicket(task.offPeakTaskId);
+      // Recheck after the take: a cancel or a concurrent replacement during
+      // the in-flight request leaves this ticket unused. A terminal task
+      // with settled=true would never pick it up in the outbox, so settle
+      // the orphan immediately instead of installing it.
+      const after = await find(task.offPeakTaskId);
+      if (
+        !after ||
+        after.serverTicketId !== task.serverTicketId ||
+        after.status === "paused" ||
+        TERMINAL_STATUSES.has(after.status)
+      ) {
+        await client.settle(ticket.ticketId).catch(() => undefined);
+        return;
+      }
+      await mutate(task.offPeakTaskId, (t) => ({
+        ...t,
+        serverTicketId: ticket.ticketId,
+        schedulable: t.status === "queued" && ticket.state === "ready",
+        ...(ticket.position !== undefined
+          ? { queuePosition: ticket.position }
+          : {}),
+        nextPollAt:
+          nextPoll ??
+          (ticket.nextPollAfterMs === undefined
+            ? undefined
+            : now().getTime() + ticket.nextPollAfterMs),
+      }));
+    } catch {
+      await mutate(task.offPeakTaskId, (t) => ({
+        ...t,
+        schedulable: false,
+        ...(nextPoll !== undefined ? { nextPollAt: nextPoll } : {}),
+      })).catch(() => undefined);
+    }
+  }
+
+  /** Claimable tasks: ready tickets on queued tasks, FIFO, backoff honored. */
+  function due(at: Date): StoredOffPeakTask[] {
+    if (!loaded) return [];
+    return loaded
+      .filter(
+        (t) =>
+          t.status === "queued" &&
+          t.schedulable &&
+          t.serverTicketId !== undefined &&
+          (t.nextDispatchAt === undefined ||
+            t.nextDispatchAt <= at.getTime()) &&
+          !dispatching.has(t.offPeakTaskId),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  function beginRun(id: string): boolean {
+    if (dispatching.has(id)) return false;
+    dispatching.add(id);
+    return true;
+  }
+
+  /** Release a claim without any backoff (retry on the next tick). */
+  function retryRun(id: string): void {
+    dispatching.delete(id);
+  }
+
+  /**
+   * Persist dispatch progress before the prompt leaves. `ranOnce` is NOT
+   * set here: a send that never gets accepted must retry with the original
+   * prompt, not the continuation. A worker crash after this point recovers
+   * as a queued fresh run (prompt never left). Returns false when the task
+   * is missing or terminal (cancelled while dispatch waited) or the durable
+   * write failed - the dispatcher must not send in those cases, and a
+   * failed write rolls the in-memory state back so housekeeping and the
+   * next claim see the task as it was.
+   */
+  async function markRunning(id: string): Promise<boolean> {
+    const before = await find(id);
+    if (!before || TERMINAL_STATUSES.has(before.status)) return false;
+    const at = now().getTime();
+    const next: StoredOffPeakTask = {
+      ...before,
+      status: "running",
+      startedAt: before.startedAt ?? at,
+      updatedAt: at,
+    };
+    loaded = loaded!.map((t) => (t.offPeakTaskId === id ? next : t));
+    try {
+      await persist(loaded);
+      return true;
+    } catch {
+      // Restore only the marker fields, and only while this task is still
+      // the object we wrote: a concurrent cancel() replaces the entry, and
+      // restoring the whole `before` snapshot would resurrect it.
+      loaded = loaded!.map((t) =>
+        t.offPeakTaskId === id &&
+        t.status === "running" &&
+        !TERMINAL_STATUSES.has(t.status)
+          ? { ...t, status: before.status, startedAt: before.startedAt }
+          : t,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * The native side accepted the prompt: from here a crash recovers as a
+   * queued continuation (ranOnce stays true), never a fresh re-run.
+   * Returns false when the durable admission record could not be written
+   * or the task is terminal - the caller treats that as a failed run so a
+   * restart cannot silently replay an accepted task. A failed write rolls
+   * back only the admission field, leaving any concurrent mutation intact.
+   */
+  async function markAdmitted(id: string): Promise<boolean> {
+    const before = await find(id);
+    if (!before || TERMINAL_STATUSES.has(before.status)) return false;
+    const next: StoredOffPeakTask = {
+      ...before,
+      ranOnce: true,
+      updatedAt: now().getTime(),
+    };
+    loaded = loaded!.map((t) => (t.offPeakTaskId === id ? next : t));
+    try {
+      await persist(loaded);
+      return true;
+    } catch {
+      loaded = loaded!.map((t) =>
+        t.offPeakTaskId === id &&
+        t.ranOnce === true &&
+        !TERMINAL_STATUSES.has(t.status)
+          ? { ...t, ranOnce: before.ranOnce }
+          : t,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Busy bound session: retry with 30s..15min backoff (native transient).
+   * Deferrals keep their own counter - they must not burn the three
+   * failure strikes reserved for real run failures.
+   */
+  async function deferRun(id: string): Promise<void> {
+    dispatching.delete(id);
+    const deferred = ((await find(id))?.deferred ?? 0) + 1;
+    const backoff = Math.min(
+      30_000 * 2 ** Math.min(deferred - 1, 5),
+      15 * 60_000,
+    );
+    await mutate(id, (t) =>
+      TERMINAL_STATUSES.has(t.status)
+        ? t
+        : {
+            ...t,
+            status: "queued",
+            deferred,
+            nextDispatchAt: now().getTime() + backoff,
+          },
+    ).catch(() => undefined);
+  }
+
+  /**
+   * Record a finished run. `ticketExpired` requeues for continuation (3102);
+   * three consecutive transient dispatch failures also fail the task.
+   * `permanent` fails immediately: missing credentials/plan/model must
+   * never park as "waiting for idle capacity" (upstream spec).
+   */
+  async function completeRun(
+    id: string,
+    outcome: "completed" | "failed" | "ticketExpired",
+    message?: string,
+    options?: { permanent?: boolean; expiredTicketId?: string },
+  ): Promise<void> {
+    dispatching.delete(id);
+    const current = await find(id);
+    if (!current || TERMINAL_STATUSES.has(current.status)) return;
+    const at = now().getTime();
+    // A cancel can land between the snapshot above and each mutation below
+    // (mutate yields); terminal states must never be overwritten from a
+    // stale pre-check, so every completion mutation re-verifies inside.
+    if (outcome === "completed") {
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "completed",
+              ranOnce: true,
+              startedAt: t.startedAt ?? at,
+              endedAt: at,
+              transientFailures: 0,
+              deferred: 0,
+            },
+      );
+      return;
+    }
+    if (outcome === "ticketExpired") {
+      // Same task_id re-take; the next claim continues the session. When
+      // the failed execution's ticket was already replaced by a polling-
+      // driven retake, the replacement is unused-but-installed: keep it and
+      // let sync progress it instead of taking yet another ticket.
+      const executionTicket = options?.expiredTicketId;
+      const replaced =
+        executionTicket !== undefined &&
+        current.serverTicketId !== executionTicket;
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "queued",
+              ranOnce: true,
+              schedulable: false,
+              startedAt: t.startedAt ?? at,
+              deferred: 0,
+              ...(message ? { failureReason: message } : {}),
+            },
+      );
+      if (replaced) return;
+      const fresh = await find(id);
+      if (fresh && !TERMINAL_STATUSES.has(fresh.status)) await retake(fresh);
+      return;
+    }
+    const failures = (current.transientFailures ?? 0) + 1;
+    if (failures >= 3 || options?.permanent)
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "failed",
+              ranOnce: t.ranOnce ?? true,
+              endedAt: at,
+              failureReason: message ?? "Run failed",
+            },
+      );
+    else
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "queued",
+              ranOnce: t.ranOnce ?? false,
+              schedulable: false,
+              transientFailures: failures,
+              nextDispatchAt: at + 30_000,
+              ...(message ? { failureReason: message } : {}),
+            },
+      );
+  }
+
+  async function cancel(id: string, cwd: string): Promise<boolean> {
+    await load();
+    const task = loaded!.find(
+      (t) => t.offPeakTaskId === id && t.workspacePath === cwd,
+    );
+    if (!task) return false;
+    if (!TERMINAL_STATUSES.has(task.status))
+      await mutate(id, (t) => ({
+        ...t,
+        status: "cancelled",
+        endedAt: now().getTime(),
+        schedulable: false,
+      }));
+    return true;
+  }
+
+  async function find(id: string): Promise<StoredOffPeakTask | undefined> {
+    await load();
+    return loaded!.find((t) => t.offPeakTaskId === id);
+  }
+
+  function describe(cwd: string): string {
+    if (!loaded) return "Idle-time tasks are not loaded yet.";
+    const scoped = loaded.filter((t) => t.workspacePath === cwd);
+    if (!scoped.length)
+      return "No idle-time tasks. Create one in a ZCode session with OffPeakCreate.";
+    return scoped
+      .slice()
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((t) =>
+        [
+          `${t.offPeakTaskId}  ${t.status}${t.schedulable ? " (ready)" : ""}`,
+          `  ${t.title}`,
+          `  position: ${t.queuePosition ?? "-"}  created: ${new Date(t.createdAt).toISOString()}`,
+          ...(t.failureReason ? [`  last error: ${t.failureReason}`] : []),
+        ].join("\n"),
+      )
+      .join("\n\n");
+  }
+
+  function ready(): Promise<void> {
+    return load();
+  }
+
+  return {
+    handle,
+    syncCycle,
+    due,
+    beginRun,
+    deferRun,
+    retryRun,
+    markRunning,
+    markAdmitted,
+    completeRun,
+    cancel,
+    find,
+    describe,
+    ready,
+  };
+}
+
+export type OffPeakService = ReturnType<typeof createOffPeakService>;

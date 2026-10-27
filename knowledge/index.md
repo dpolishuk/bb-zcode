@@ -17,6 +17,7 @@ not replace the user-facing [README](../README.md) or [docs/](../docs/).
 ## Contracts
 
 - [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions, native model identities and context-budget translation rules.
+- [Off-peak protocol](contracts/off-peak-protocol.md) - The undocumented Z.ai idle-time ticket gateway (wire shapes, idle-plan per-run execution, 3102 continuation) and the plugin design derived from it; draft until live-gateway verification.
 
 ## Decisions
 

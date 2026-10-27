@@ -712,3 +712,67 @@ it("a busy bound thread defers the run instead of recording a failure", async ()
   await bridge.close();
   void until;
 });
+
+it("dispatches a management-command prompt natively instead of intercepting it", async () => {
+  mkdirSync(dir, { recursive: true });
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = dispatchHarness(dir);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  writeFileSync(
+    join(dir, "automations.json"),
+    JSON.stringify({
+      version: 1,
+      automations: [
+        {
+          automationId: "automation-cmd",
+          title: "Command",
+          cronExpr: "* * * * *",
+          prompt: "/zcode-tasks",
+          targetTaskId: "native-1",
+          threadId: "thread",
+          workspacePath: cwd,
+          providerOptions: dispatchOptions.providerOptions,
+          enabled: true,
+          lifecycleStatus: "active",
+          nextRunAt: Date.now() + 1_500,
+          runCount: 0,
+          recurring: true,
+          createdAt: Date.now(),
+        },
+      ],
+    }),
+  );
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: dispatchOptions,
+    instructionMode: "replace",
+  });
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  // The scheduled prompt must reach the native side as task data; the local
+  // command branch would finish without settle(), stranding the run marker.
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" &&
+        c.params.automationId === "automation-cmd",
+    ),
+  );
+  const send = calls.find(
+    (c) =>
+      c.method === "session/send" && c.params.automationId === "automation-cmd",
+  )!;
+  expect(send.params.content).toContain("/zcode-tasks");
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "automations.json"), "utf8")) as {
+      automations: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().automations[0].runCount === 1);
+  await until(() => native.get("native-1")!.closed === true);
+  await bridge.close();
+});
