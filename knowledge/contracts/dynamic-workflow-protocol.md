@@ -1,0 +1,135 @@
+---
+type: contract
+title: Dynamic workflow protocol (POC-verified)
+description: Wire contract for ZCode dynamic workflows as exercised against the installed CLI 0.17.0 - gate, tool family, skill gate, approval, display payload, completion notification, and the cross-process run read API.
+status: draft
+stale_after: 2027-02-27T00:00:00Z
+tags: [contract, protocol, workflow, visualization]
+sources:
+  - title: POC run 2026-10-27 (live CLI 0.17.0, loopback fixture)
+    resource: ../../scripts/poc-dynamic-workflow.ts
+  - title: Upstream presentation spec
+    resource: https://github.com/zai-org/ZCode/blob/main/docs/dynamic-workflow/presentation.md
+  - title: Upstream authoring spec
+    resource: https://github.com/zai-org/ZCode/blob/main/docs/dynamic-workflow/authoring.md
+  - title: Upstream launch spec
+    resource: https://github.com/zai-org/ZCode/blob/main/docs/dynamic-workflow/launch.md
+  - title: Gate policy source
+    resource: https://github.com/zai-org/ZCode/blob/main/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/dynamic-workflow-policy.ts
+generated:
+  by: zcode-agent/GLM-5.3
+  at: 2026-10-27T15:30:00Z
+verified:
+  - by: zcode-agent/GLM-5.3
+    at: 2026-10-27T15:30:00Z
+---
+
+# Dynamic workflow protocol (POC-verified)
+
+Every claim below was observed against the installed CLI bundle 0.17.0
+(`zcode.cjs`, Oct 23 2026 build) driven by
+[scripts/poc-dynamic-workflow.ts](../../scripts/poc-dynamic-workflow.ts):
+an isolated-data-dir run with a deterministic loopback model that loaded the
+skill gate, called `CreateWorkflow` with a two-phase script, auto-allowed the
+approval, and watched the run reach `completed`. Draft status: one minimal
+happy path; amend/resume/holes/multi-lane fan-out are unexercised.
+
+## Gate (how the tools turn on)
+
+- `session/create` / `session/resume` accept `dynamicWorkflowEnabled: true`
+  plus optional `dynamicWorkflowMode` (`alwaysOn` | `onDemand`). The gate is
+  fail-closed and requires an explicit boolean from trusted hosts - a host
+  session may not fall into the TUI/headless exemption ("absent = register
+  everything").
+- Alternative: `workspace/updateDynamicWorkflowPolicy` caches a
+  workspace-level answer inside the CLI process
+  (`{workspace, enabled, mode?}`); per-call params still win.
+- Observed: one boolean on `session/create` was enough. The model tool
+  catalog then contained **10 workflow tools**: `CreateWorkflow`,
+  `AmendWorkflow`, `SaveWorkflow`, `EvalWorkflowSnippet`, `ListWorkflowRuns`,
+  `GetWorkflowRun`, `ResumeWorkflowRun`, `ResolveQuestion` variants
+  (`ResolveWorkflowQuestion`), `FillWorkflowHole`, `ListSavedWorkflows`.
+
+## Script and skill gate
+
+- The bundled `dynamic-workflows` skill must be loaded first: a completed
+  `Skill` tool call with `{ skill: "dynamic-workflows" }` in visible history.
+  The skill is bundled (present even with `plugins.enabled: false`).
+- Script shape on 0.17.0: `const meta = { name, description, phases: [{id, ...}] }`
+  - **no `export`** ("the script is compiled inside a function body"; the
+    diagnostic arrives in the tool result). Body facade: `agent(name?)`,
+    `.ask(instructions)`, `phase(name)`, `log(message)`.
+- The persisted editable copy lands under `.zcode/workflow-drafts/*.dwf.ts`
+  inside the workspace; the tool result names the path and suggests
+  `AmendWorkflow` with `path` for revisions.
+- Compile diagnostics ride the same tool result channel (`display.errorCount`,
+  `display.diagnostics`) - a failed compile never reaches the permission flow.
+
+## Approval
+
+`CreateWorkflow` triggers the standard `interaction/requestPermission`
+reverse RPC (already answered by our bridge via bb approvals). Shape
+observed: `{ sessionId, turnId, toolCallId, toolName: "CreateWorkflow",
+reason: "Tool CreateWorkflow always requires explicit approval", riskLevel,
+requestId, options: [{kind: "allow_once"|"deny", response: {decision, reason}}],
+input: { script, adjustable_settings: { subagent_model: boolean,
+concurrency_ceiling: number } } }`. The `adjustable_settings` block is the
+host's cue that a confirmation UI could offer a subagent-model picker and a
+parallelism control. Timeline side: `permission.requested` /
+`permission.resolved` session events also fire.
+
+## Display payload (the visualization contract)
+
+The plain `tool.updated` (`kind: "result"`) event for `CreateWorkflow`
+carries `result.display` with `kind: "create_workflow"` and the full
+`causalityGraph` exactly as the presentation spec describes it:
+`steps` (ask/world-read sites with `line/column/lane/phase`), `lanes`
+(actors), `participants` (phase:lane cards), `handoffs`, `phases`,
+`phaseEdges`, `exits`, optional `holes`/`truncated`. Our bridge already
+translates `tool.updated` into bb tool rows - the graph needs no new event
+channel, only a renderer (bb `experimental_timelineRenderer`) on the bb side.
+`truncated: true` drops the whole phase vocabulary; renderers must honor
+that (half a picture would lie).
+
+## Completion and wake-up
+
+When the run finishes, the runtime injects a **new turn** whose input is a
+`<task-notification>` block (`task-id` = `dwfrun-...`, `tool-use-id`,
+`status`, `summary`) followed by a presentation instruction for the model.
+The follow-up `turn.completed` carries `workflowResultConsumed`. This is the
+same background-wake channel the bridge already maps for background work.
+
+## Run read API (host-side, cross-process)
+
+Verified cold from a second CLI process against the persisted store:
+
+- `workflows/runs { workspace, limit }` → rows with `runId`, `status`
+  (`pending|running|completed|errored|stopped` + `stopReason`), `createdAt`,
+  `updatedAt`, `spentTokens`, **`parentSessionId` + `toolCallId`** (deep-link
+  keys into the owning turn), `cwd`, and `artifacts` chips (≤8:
+  `file|markdown|chart|table|metrics|board`).
+- `workflows/list { workspace }` → saved workflows (`workflows`, `invalid`,
+  `dir` = `<workspace>/.zcode/workflows`).
+- `workflows/forRun`, `workflows/get`, `workflows/save`, `workflows/delete`,
+  `workflows/move`, `workflows/updateMeta` exist; `forRun` returned `{}` for
+  an unsaved run.
+
+The store outlives the thread's CLI process, so a bb-side hub/pane can read
+run history from any live session without the original thread.
+
+## Open questions for stage 8/9
+
+- Per-step **live** status during a run: `workflows/runs` polling is proven;
+  whether Desktop's per-step lamp stream reaches an app-server host (v4
+  subscriptions?) is unverified.
+- `model_bindings` validation, holes/`FillWorkflowHole` round trip,
+  `AmendWorkflow`, `ResumeWorkflowRun`, and fan-out (`Promise.all`)
+  topologies are unexercised.
+- Subagent child sessions: no parent-stream events observed (children are
+  invisible to the owning session's subscription beyond the notification).
+
+## Related knowledge
+
+- [Feature roadmap](../decisions/feature-roadmap.md) stages 8-9.
+- [Protocol contracts](protocol-contracts.md) for the surrounding wire
+  surfaces.

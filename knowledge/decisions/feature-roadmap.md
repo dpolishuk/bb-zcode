@@ -138,6 +138,33 @@ bridge; it remains covered by
 automation host and the v0.11.0 Off-Peak host moved their stages off that
 wait list by hosting inside the bridge worker.
 
+## Stage 8 — dynamic workflows: gate and launch (POC-verified 2026-10-27)
+
+Upstream's dynamic workflows are gated, not host-serviced: one explicit
+`dynamicWorkflowEnabled: true` on `session/create`/`resume` (or a
+`workspace/updateDynamicWorkflowPolicy` sync) registers the whole tool family
+inside the CLI. A live POC against the installed CLI 0.17.0
+([scripts/poc-dynamic-workflow.ts](../../scripts/poc-dynamic-workflow.ts))
+ran a two-phase workflow end to end through a bridge-shaped host: skill gate,
+`CreateWorkflow`, approval via the standard
+`interaction/requestPermission` (already answered by the bridge), run
+completion, and the `<task-notification>` wake turn. Implementation is a
+`dynamicWorkflowsEnabled` plugin setting plus the gate params - the
+off-peak/automations pattern again. Wire details:
+[workflow contract](../contracts/dynamic-workflow-protocol.md) (draft).
+
+## Stage 9 — dynamic workflow visualization (design ready)
+
+The ZCode timeline is drawn from one structured `causalityGraph` payload
+that rides the ordinary `CreateWorkflow` tool result - no new event channel
+needed. On the bb side, `experimental_timelineRenderer` lets a provider
+plugin render the expanded body of its own tool rows, and thread panels plus
+sidebar navigation cover the run pane and a workflows hub; `workflows/runs`
+is readable cross-process with `parentSessionId`+`toolCallId` deep-link keys.
+This is the plugin's first frontend code (`bb.app` bundle), so it is a
+deliberate scope decision, not a blocked one. Live per-step status
+(lamps) beyond `workflows/runs` polling is the main open question.
+
 ## Out of scope for this plugin
 
 Start/Team/Highspeed plans (need real accounts to verify), full subagent

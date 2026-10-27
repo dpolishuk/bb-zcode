@@ -1,5 +1,24 @@
 # Knowledge log
 
+## 2026-10-27 (dynamic workflow POC)
+
+- **Verified** end-to-end dynamic workflow launch against the installed CLI
+  0.17.0 via a new loopback POC
+  ([scripts/poc-dynamic-workflow.ts](../scripts/poc-dynamic-workflow.ts)):
+  one `dynamicWorkflowEnabled: true` on `session/create` registers the full
+  10-tool family; the bundled-skill gate, `CreateWorkflow` with a two-phase
+  script, the `interaction/requestPermission` approval (input carries
+  `adjustable_settings` for model/parallelism controls), the
+  `causalityGraph` display payload on the plain tool-result event, the
+  `<task-notification>` wake turn, and a `completed` run all observed.
+  Cross-process `workflows/runs` reads work from a cold CLI against the
+  persisted store (rows carry `parentSessionId`+`toolCallId` deep links).
+  No host service beyond reverse RPCs the bridge already answers.
+- **Added** [workflow contract](contracts/dynamic-workflow-protocol.md)
+  (draft: one happy path; amend/resume/holes/live-lamps open) and roadmap
+  stages 8 (gate+launch) / 9 (visualization via bb
+  `experimental_timelineRenderer` + thread panel + `workflows/runs` hub).
+
 ## 2026-10-27 (v0.11.0 merged and activated)
 
 - **Merged** PR #2 (Off-Peak host) into main at `e2cc253` after thirteen
