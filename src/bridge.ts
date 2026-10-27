@@ -1447,23 +1447,27 @@ export function createBridge(
       return;
     }
     if (!credentials) {
-      await offpeak.completeRun(
-        id,
-        "failed",
-        "off-peak requires a desktop sign-in with an individual Coding Plan",
-        { permanent: true },
-      );
+      await offpeak
+        .completeRun(
+          id,
+          "failed",
+          "off-peak requires a desktop sign-in with an individual Coding Plan",
+          { permanent: true },
+        )
+        .catch(() => undefined);
       offPeakDispatching.delete(id);
       return;
     }
     const idlePlanProviderId = `account:${credentials.family}-offpeak-idle-plan`;
     if (!task.model) {
-      await offpeak.completeRun(
-        id,
-        "failed",
-        "idle-time task has no model; recreate it with an explicit model",
-        { permanent: true },
-      );
+      await offpeak
+        .completeRun(
+          id,
+          "failed",
+          "idle-time task has no model; recreate it with an explicit model",
+          { permanent: true },
+        )
+        .catch(() => undefined);
       offPeakDispatching.delete(id);
       return;
     }

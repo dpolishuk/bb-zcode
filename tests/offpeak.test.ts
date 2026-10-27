@@ -1448,3 +1448,70 @@ it("a 3102 expiry for an already-replaced ticket keeps the replacement", async (
   expect(client.taken).toHaveLength(3);
   expect((await s.find(id))?.serverTicketId).toBe("ticket-3");
 });
+
+// ---- Review round 12: slot leak on throwing permanent-failure persistence.
+
+it("releases the dispatch slot even when recording a permanent failure throws", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir, "done", "ok");
+  const { bridge, calls, native, cwd, until, rpc, client } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  // Task without a model: its permanent-failure record is the throwing one.
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "No model",
+      prompt: "p",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  // Break persistence so recording the permanent failure throws, then
+  // repair it: the leaked slot would block all later off-peak dispatches.
+  const { rmSync, mkdirSync } = await import("node:fs");
+  rmSync(join(dir, "offpeak.json"));
+  mkdirSync(join(dir, "offpeak.json"));
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  const readStore = () => {
+    try {
+      return JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+        tasks: Array<Record<string, unknown>>;
+      };
+    } catch {
+      return { tasks: [] as Array<Record<string, unknown>> };
+    }
+  };
+  // Give the ticks time to hit the no-model path and swallow the throw.
+  await new Promise((r) => setTimeout(r, 400));
+  void readStore;
+  rmSync(join(dir, "offpeak.json"), { recursive: true, force: true });
+  const { writeFileSync: wfs } = await import("node:fs");
+  wfs(join(dir, "offpeak.json"), JSON.stringify({ version: 1, tasks: [] }));
+  // A second, fully valid task must still dispatch: the slot was released.
+  const second = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Valid",
+      prompt: "Second task works",
+      model: "glm-4.7",
+    }),
+  );
+  expect(second.ok).toBe(true);
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" &&
+        c.params.offPeakTaskId !== undefined &&
+        String(c.params.content).includes("Second task works"),
+    ),
+  );
+  await bridge.close();
+  void client;
+});
