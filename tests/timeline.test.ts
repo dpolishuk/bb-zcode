@@ -477,3 +477,55 @@ it("keeps the workflow row honest without a graph and on errors", () => {
   for (const d of deltas)
     expect(threadDeltaSchema.safeParse(d).success).toBe(true);
 });
+
+it("closes pending workflow rows when the turn ends without a result", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-3",
+    toolName: "CreateWorkflow",
+    input: { saved: { name: "nightly" } },
+  });
+  timeline.finish("interrupted");
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("interrupted");
+  expect(close.item).toMatchObject({
+    type: "extension",
+    kind: "zcode/workflow-graph",
+    payload: {
+      v: 1,
+      state: "failed",
+      error: "ZCode ended before the workflow returned.",
+    },
+  });
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});
+
+it("marks a workflow result event that reports failure as failed", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-4",
+    toolName: "CreateWorkflow",
+    input: { script: 'const meta = { name: "broken" };' },
+  });
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "wf-4",
+    result: {
+      success: false,
+      content: "The workflow script has errors: `export` is not allowed",
+    },
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("failed");
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("failed");
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toBe("Tool reported failure");
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});

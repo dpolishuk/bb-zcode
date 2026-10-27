@@ -395,7 +395,10 @@ export class Timeline {
           const error =
             p.kind === "error"
               ? text(record(p.error).message, "Tool failed")
-              : undefined;
+              : record(p.result).isError === true ||
+                  record(p.result).success === false
+                ? "Tool reported failure"
+                : undefined;
           const payload = workflowPayloadDone(p.result, error);
           this.emit([
             {
@@ -524,6 +527,28 @@ export class Timeline {
         presentation: toolPresentation(tool.name),
       });
     this.tools.clear();
+    // Workflow rows live outside `tools`; an interrupted turn must close
+    // them too or the renderer keeps a stale "running" row forever.
+    for (const [id, row] of this.workflowRows)
+      deltas.push({
+        kind: "item.close",
+        key: {
+          providerItemId: id,
+          ...(row.parentRef ? { parentRef: row.parentRef } : {}),
+        },
+        status: status === "completed" ? "failed" : status,
+        item: {
+          type: "extension",
+          kind: WORKFLOW_GRAPH_EXTENSION_KIND,
+          payload: json({
+            v: 1,
+            state: "failed",
+            error: "ZCode ended before the workflow returned.",
+          }),
+        },
+        presentation: workflowPresentation(),
+      });
+    this.workflowRows.clear();
     if (!this.hasText && response?.trim())
       deltas.push({
         kind: "item.textClose",
