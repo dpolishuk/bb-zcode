@@ -30,6 +30,10 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   pass. Note: `threadPanelAction` is retired in newer SDK typings (still
   supported); migrating to `experimental_tab` needs an SDK bump and stays
   follow-up work.
+- The dynamic-workflow POC script now closes its loopback model server and
+  exits on its own after printing the summary; the open listener used to pin
+  the Node event loop, so a finished POC process lingered and its surrounding
+  background task stayed "running" indefinitely.
 
 ## 0.13.0 — 2026-10-27
 

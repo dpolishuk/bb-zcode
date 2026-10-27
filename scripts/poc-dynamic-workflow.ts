@@ -468,6 +468,11 @@ log("poc.summary", {
   terminalRunStatus: terminalRun?.status ?? null,
 });
 await client.close();
+// The listening model server pins the Node event loop; without this the
+// finished POC process lingers forever and the surrounding background task
+// never completes.
+modelServer.closeAllConnections?.();
+await new Promise<void>((resolve) => modelServer.close(() => resolve()));
 if (!terminalRun)
   throw new Error(
     `POC did not reach a terminal workflow run (turn: ${JSON.stringify(terminal?.resultType ?? "none")}).`,
