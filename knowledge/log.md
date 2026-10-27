@@ -1,5 +1,22 @@
 # Knowledge log
 
+## 2026-10-27 (v0.11.0 merged and activated)
+
+- **Merged** PR #2 (Off-Peak host) into main at `e2cc253` after thirteen
+  bot-review waves (Codex / CodeRabbit / Copilot); the final Codex pass on
+  `d0fb44b` returned a clean 👍 with zero inline findings. Every fixed
+  finding from the earlier waves carries a regression test (224 tests
+  green).
+- **Verified** post-merge activation in the installed bb (0.47.1):
+  `bb marketplace refresh` + `bb plugin update zcode` moved the running
+  plugin 0.10.1 → 0.11.0 at the merge commit, and `npm run test:live`
+  on main reported `RUNTIME_VERIFIED` (exit 0). The live Z.ai off-peak
+  gateway itself was not exercised — the wire contract stays
+  [draft](contracts/off-peak-protocol.md) until a real idle-time run.
+- **Updated** [feature roadmap](decisions/feature-roadmap.md): stages 6
+  (automations + Off-Peak) now shipped plugin-side; only MCP Apps / Gen UI
+  remains blocked on a host channel.
+
 ## 2026-10-24 (v0.11.0, feat/off-peak branch)
 
 - **Added** Idle-time (off-peak) task host, completing roadmap stage 6:

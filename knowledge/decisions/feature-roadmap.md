@@ -100,7 +100,7 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
   launch, permissions, lifecycle) that needs explicit maintainer approval
   before any implementation.
 
-## Stage 6 — automations (done in v0.10.0), Off-Peak still blocked
+## Stage 6 — automations (v0.10.0) and Off-Peak (v0.11.0), both shipped plugin-side
 
 Native automations shipped plugin-side (2026-10-23): `src/automations.ts`
 answers the five `automation/*` reverse RPCs from a JSON store in
@@ -113,26 +113,30 @@ while bb is open; busy sessions defer ten minutes; three consecutive
 failures park a schedule as `failed`. The upstream reference
 implementations in `packages/services` (`AutomationService`/`OffPeakTaskService`,
 `zcodeAgentService` handlers) informed the shapes; see the
-[host-boundary amendment](zcode-desktop-host-boundary.md). Off-Peak remains
-unregistered: execution needs the Z.ai gateway ticket client and
-plan-gated quotas, and the browser executor stays a Desktop-only injection
-
-- both still wait on a deliberate decision or an upstream surface.
+[host-boundary amendment](zcode-desktop-host-boundary.md). Off-Peak shipped
+plugin-side (2026-10-27, merged as v0.11.0 after PR #2): `src/offpeak.ts`
+implements the Z.ai gateway ticket client directly (take / batch status /
+settle with desktop JWT + individual Coding Plan key), a separate
+`offpeak.json` store, and dispatch through the bound session with per-run
+credentials via `modelExecution.requestAuth` — no host scheduler or
+reverse-RPC auth needed. Gated by `offPeakTasksEnabled` (off by default);
+the live gateway itself is not yet exercised, so the wire contract stays
+[draft](../contracts/off-peak-protocol.md). The browser executor remains a
+Desktop-only injection.
 
 ## Stage 7 — MCP Apps / Gen UI (experimental)
 
 Map `mcp/ui*` (16 methods) onto bb plugin UI surfaces (fixed tabs, browser
 pages). Long-term; upstream itself limits interactive pages.
 
-## Stages 6-7 remainder — Off-Peak and MCP Apps still blocked on hosts
+## Stage 7 — MCP Apps / Gen UI (experimental), the last host-blocked stage
 
-Off-Peak execution and MCP Apps / Gen UI hit the same wall as before:
-Off-Peak needs the Z.ai gateway ticket client plus desktop-host scheduler
-injections, and `mcp/ui*` is a CLI→host reverse RPC with no channel through
-the provider bridge. They remain covered by
+`mcp/ui*` is a CLI→host reverse RPC with no channel through the provider
+bridge; it remains covered by
 ([get-bb/bb#6008](https://github.com/get-bb/bb/issues/6008)) and the
-[host-boundary decision](zcode-desktop-host-boundary.md); the v0.10.0
-automation host does not change their status.
+[host-boundary decision](zcode-desktop-host-boundary.md). The v0.10.0
+automation host and the v0.11.0 Off-Peak host moved their stages off that
+wait list by hosting inside the bridge worker.
 
 ## Out of scope for this plugin
 
