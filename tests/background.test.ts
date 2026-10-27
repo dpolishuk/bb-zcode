@@ -537,6 +537,81 @@ it("waits for the journal when the projection reports completion first", async (
   expect(closed?.status).toBe("completed");
   expect(record(record(closed).item).summary).toBe("completed · 34 tokens");
 });
+it("retries a transient journal timeout and degrades only after persistent failures", async () => {
+  const terminal = journalPage([
+    { type: "run-settled", payload: { status: "completed" } },
+    { type: "usage-updated", payload: { spentTokens: 34 } },
+  ]);
+  let timeouts = 1; // one transient timeout, then the journal answers.
+  const projection = () => ({
+    projection: {
+      backgroundJobs: [
+        { taskId: "dwfrun-8", taskKind: "workflow", status: "completed" },
+      ],
+    },
+  });
+  const wire: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents") {
+        if (timeouts-- > 0) throw new Error("request timeout");
+        return terminal;
+      }
+      if (method === "session/read") return projection();
+      return {};
+    },
+    async close() {},
+  };
+  const deltas: ThreadDelta[] = [];
+  const tasks = new BackgroundWork(
+    wire,
+    "native",
+    (d) => deltas.push(...d),
+    () => "glm-5.3",
+  );
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-8", taskKind: "workflow", status: "running" },
+    ],
+  });
+  // Refresh 1: the journal times out once but the row must stay open.
+  await tasks.refresh();
+  expect(deltas.some((d) => d.kind === "item.close")).toBe(false);
+  // Refresh 2: the retry folds the terminal page and closes with usage.
+  await tasks.refresh();
+  const closed = deltas.find((d) => d.kind === "item.close");
+  expect(closed?.status).toBe("completed");
+  expect(record(record(closed).item).summary).toBe("completed · 34 tokens");
+  // A persistently failing surface still degrades: three consecutive
+  // failures let a terminal row close run-level, without usage.
+  const deltas2: ThreadDelta[] = [];
+  const dead: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents")
+        throw new Error("unsupported");
+      if (method === "session/read") return projection();
+      return {};
+    },
+    async close() {},
+  };
+  const tasks2 = new BackgroundWork(
+    dead,
+    "native",
+    (d) => deltas2.push(...d),
+    () => "glm-5.3",
+  );
+  tasks2.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-8", taskKind: "workflow", status: "running" },
+    ],
+  });
+  await tasks2.refresh();
+  await tasks2.refresh();
+  expect(deltas2.some((d) => d.kind === "item.close")).toBe(false);
+  await tasks2.refresh();
+  const degraded = deltas2.find((d) => d.kind === "item.close");
+  expect(degraded?.status).toBe("completed");
+  expect(record(record(degraded).item).summary).toBeUndefined();
+});
 it("keeps the workflow row honest when the journal surface is unavailable", async () => {
   const deltas: ThreadDelta[] = [];
   const wire: ZCodeConnection = {

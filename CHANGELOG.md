@@ -48,7 +48,10 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   an empty fold. A third pass tightened the terminal close to wait for the
   journal's `run-settled` (not merely a pull attempt): a projection that
   reports completion while the fold still shows running agents holds the row
-  open one more refresh instead of freezing stale lamps.
+  open one more refresh instead of freezing stale lamps. A fourth pass made
+  the degraded close require three consecutive journal failures, so a single
+  transient timeout retries on the next refresh instead of closing the row
+  without lamps or usage.
 
 ## 0.13.0 — 2026-10-27
 

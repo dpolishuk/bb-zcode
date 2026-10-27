@@ -384,15 +384,22 @@ interface RunFold {
   nodeActor: Map<string, string>;
   spentTokens?: number;
   settled?: { status: string; stopReason?: string; message?: string };
-  /** True while every pull attempt failed (v4 surface unavailable). */
-  journalFailed?: boolean;
+  /** Consecutive failed journal pulls; one flaky timeout must not degrade. */
+  journalFailures: number;
 }
 const newFold = (): RunFold => ({
   afterSequence: -1,
   phaseNames: [],
   actors: new Map(),
   nodeActor: new Map(),
+  journalFailures: 0,
 });
+/**
+ * A terminal row may close degraded (run-level status only) only after this
+ * many consecutive journal failures — a persistently unsupported surface.
+ * One transient timeout keeps the row open so the next refresh can retry.
+ */
+const JOURNAL_FAILURE_LIMIT = 3;
 const NODE_LIVE: Record<string, AgentLampState> = {
   queued: "queued",
   waiting: "queued",
@@ -665,13 +672,17 @@ export class BackgroundWork {
         key = { providerItemId: `zcode-work-${id}` };
       if (previous && !previous.open) continue;
       // A terminal workflow row closes only once the journal confirms
-      // `run-settled` (or the v4 surface is confirmed unavailable, degrading
-      // to a run-level close). A run discovered already-settled, or a
-      // projection that reports completion before the journal fold caught
-      // up, waits one more refresh — a closed row can never be repaired.
+      // `run-settled` — or the surface is confirmed persistently
+      // unavailable (JOURNAL_FAILURE_LIMIT consecutive failures), degrading
+      // to a run-level close. A run discovered already-settled, a projection
+      // ahead of the fold, or one transient journal timeout waits one more
+      // refresh — a closed row can never be repaired.
       const hydrating =
         isWorkflowRun &&
-        !(runFold && (runFold.settled || runFold.journalFailed));
+        !(
+          runFold &&
+          (runFold.settled || runFold.journalFailures >= JOURNAL_FAILURE_LIMIT)
+        );
       if (!previous) this.emit([{ kind: "item.open", key, item }]);
       if (!pending && (!previous || previous.open) && !hydrating)
         this.emit([{ kind: "item.close", key, item, status }]);
@@ -727,9 +738,6 @@ export class BackgroundWork {
     for (const [runId, fold] of this.runs) {
       if (fold.settled) continue;
       try {
-        // A working pull clears an earlier failure, so only a persistently
-        // unavailable surface degrades the terminal close.
-        fold.journalFailed = false;
         // The cap guards a runaway journal; the cursor resumes next refresh.
         for (let page = 0; page < 25; page++) {
           const reply = record(
@@ -755,10 +763,13 @@ export class BackgroundWork {
             fold.afterSequence = last.sequence;
           if (reply.hasMore !== true || events.length === 0) break;
         }
+        // Only a completed pull clears the failure streak.
+        fold.journalFailures = 0;
       } catch {
-        // A failing pull marks the journal surface unavailable for this run:
-        // a terminal projection may then close degraded to run-level status.
-        fold.journalFailed = true;
+        // Count consecutive failures: one transient timeout keeps the row
+        // open for a retry; reaching the limit marks the surface
+        // unavailable and allows a degraded run-level close.
+        fold.journalFailures += 1;
       }
     }
   }
