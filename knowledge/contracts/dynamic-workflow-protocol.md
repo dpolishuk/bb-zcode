@@ -158,7 +158,9 @@ Bridge fold invariants (review-hardened in v0.14.0): pages are drained while
 refresh guards a runaway journal; the `afterSequence` cursor resumes), and
 node settlement is not actor settlement — an actor tracks its in-flight
 nodes and only goes terminal when the last one settles, so a second ask
-reactivates a `done` lamp.
+reactivates a `done` lamp. Identity keys are `siteId#ordinal` (fan-out
+reuses siteIds), and a terminal row closes only after one journal pull —
+including runs first seen already settled.
 
 ## Open questions for stage 8/9
 

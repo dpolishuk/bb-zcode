@@ -384,6 +384,8 @@ interface RunFold {
   nodeActor: Map<string, string>;
   spentTokens?: number;
   settled?: { status: string; stopReason?: string; message?: string };
+  /** Set once a journal pull was attempted, success or not. */
+  pulled?: boolean;
 }
 const newFold = (): RunFold => ({
   afterSequence: -1,
@@ -413,20 +415,27 @@ function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
   const type = text(event.type);
   const payload = record(event.payload);
   const now = Date.now();
-  const actorOf = (raw: unknown): string | undefined => {
+  // Journal references are {siteId, ordinal}; loop/fan-out executions reuse
+  // a siteId across ordinals, so the ordinal is part of the runtime
+  // identity of both actors and node instances.
+  const refKey = (raw: unknown): string | undefined => {
     // text() falls back to "" (not nullish); normalize so ?? map lookups work.
-    const siteId = text(record(raw).siteId);
-    return siteId || undefined;
+    const ref = record(raw);
+    const siteId = text(ref.siteId);
+    if (!siteId) return undefined;
+    return typeof ref.ordinal === "number"
+      ? `${siteId}#${ref.ordinal}`
+      : siteId;
   };
   if (type === "run-launched") {
     const names = payload.phaseNames;
     if (Array.isArray(names))
       fold.phaseNames = names.map((name) => text(name)).filter(Boolean);
   } else if (type === "actor-created") {
-    const siteId = actorOf(payload.actor);
-    if (siteId)
-      fold.actors.set(siteId, {
-        siteId,
+    const actorKey = refKey(payload.actor);
+    if (actorKey)
+      fold.actors.set(actorKey, {
+        siteId: actorKey,
         ...(text(payload.name) ? { name: text(payload.name) } : {}),
         ...(text(payload.phaseName)
           ? { phaseName: text(payload.phaseName) }
@@ -436,12 +445,13 @@ function foldRunEvent(fold: RunFold, event: Record<string, unknown>) {
         outstanding: new Map(),
       });
   } else if (type.startsWith("node-")) {
-    const instance = actorOf(payload.instance);
+    const instance = refKey(payload.instance);
     if (!instance) return;
     // Settle events name only the node; earlier dispatch events carry the
     // owning actor, so remember that edge when it is present.
-    const actorSite = actorOf(payload.actor) ?? fold.nodeActor.get(instance);
-    if (actorOf(payload.actor)) fold.nodeActor.set(instance, actorSite!);
+    const dispatchActor = refKey(payload.actor);
+    const actorSite = dispatchActor ?? fold.nodeActor.get(instance);
+    if (dispatchActor) fold.nodeActor.set(instance, actorSite!);
     if (!actorSite) return;
     const actor = fold.actors.get(actorSite);
     const target = actor ?? {
@@ -654,16 +664,21 @@ export class BackgroundWork {
       const previous = this.jobs.get(id),
         key = { providerItemId: `zcode-work-${id}` };
       if (previous && !previous.open) continue;
+      // A terminal workflow row closes only after its journal was pulled at
+      // least once: a run discovered already-settled would otherwise close
+      // on an empty fold (no lamps, no final usage), and polling never
+      // repairs a closed row.
+      const hydrating = isWorkflowRun && !runFold?.pulled;
       if (!previous) this.emit([{ kind: "item.open", key, item }]);
-      if (!pending && (!previous || previous.open))
+      if (!pending && (!previous || previous.open) && !hydrating)
         this.emit([{ kind: "item.close", key, item, status }]);
       else if (
-        pending &&
+        (pending || hydrating) &&
         previous?.open &&
         JSON.stringify(previous.item) !== JSON.stringify(item)
       )
         this.emit([{ kind: "item.progress", key, snapshot: item }]);
-      this.jobs.set(id, { job, item, open: pending });
+      this.jobs.set(id, { job, item, open: pending || hydrating });
     }
     // Keep completed deduplication bounded without evicting active work.
     for (const [id, entry] of this.jobs)
@@ -736,6 +751,11 @@ export class BackgroundWork {
         }
       } catch {
         /* lamps need the journal; the status row survives without them */
+      } finally {
+        // Even a failed attempt counts as hydration: a discovered-terminal
+        // run may then close, degraded to run-level status when the journal
+        // surface is unavailable.
+        fold.pulled = true;
       }
     }
   }
