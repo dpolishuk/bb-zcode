@@ -406,6 +406,7 @@ function offPeakHarness(
     },
   };
   const client = fakeClient({ states: ["ready"] });
+  const background = { job: undefined as Record<string, unknown> | undefined };
   let serial = 0,
     rid = 0,
     turnSerial = 0;
@@ -418,7 +419,7 @@ function offPeakHarness(
     offPeakClientFactory: () => client,
     clientFactory: (_launch, _cwd, cb) => {
       let nativeId = "";
-      let backgroundJob: Record<string, unknown> | undefined;
+      const backgroundJob = () => background.job;
       const snapshot = () => ({
         session: { sessionId: nativeId },
         settings: {
@@ -431,7 +432,7 @@ function offPeakHarness(
         },
         projection: {
           turnCount: 0,
-          backgroundJobs: backgroundJob ? [backgroundJob] : [],
+          backgroundJobs: backgroundJob() ? [backgroundJob()] : [],
         },
       });
       return {
@@ -463,7 +464,7 @@ function offPeakHarness(
           if (method === "session/send") {
             const s = native.get(nativeId)!;
             if (p.offPeakTaskId !== undefined && attachBackgroundJob)
-              backgroundJob = {
+              background.job = {
                 taskId: `bg-${p.offPeakTaskId}`,
                 status: "running",
               };
@@ -518,7 +519,17 @@ function offPeakHarness(
     await until(() => messages.some((m) => m.id === id && !m.method));
     return messages.find((m) => m.id === id && !m.method)!;
   }
-  return { bridge, messages, calls, native, cwd, until, rpc, client };
+  return {
+    bridge,
+    messages,
+    calls,
+    native,
+    cwd,
+    until,
+    rpc,
+    client,
+    background,
+  };
 }
 
 const offPeakOptions = {
@@ -1168,4 +1179,151 @@ it("dispatches a management-command prompt natively instead of intercepting it",
     };
   await until(() => readStore().tasks[0]?.status === "completed");
   await bridge.close();
+});
+
+// ---- Review round 9: cold-dispatch rebind, background settle release, single-flight retake.
+
+it("fails a cold dispatch when the thread was rebound and released", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  // Rebind the thread to a new native session, then release everything:
+  // the cold dispatcher must not resume the task's old native session.
+  await rpc("thread/resume", {
+    threadId: "thread",
+    cwd,
+    providerThreadId: "native-9",
+    options: offPeakOptions,
+    instructionMode: "replace",
+    dynamicTools: [],
+  });
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-9",
+    intent: "release",
+    activeTurnId: null,
+  });
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "failed");
+  expect(String(readStore().tasks[0].failureReason)).toContain(
+    "no longer backs this task's session",
+  );
+  expect(
+    calls.some(
+      (c) => c.method === "session/resume" && c.params.sessionId === "native-1",
+    ),
+  ).toBe(false);
+  await bridge.close();
+});
+
+it("releases a dispatcher-owned child once its background work settles", async () => {
+  process.env.BB_BRIDGE_DIR = dir;
+  const harness = offPeakHarness(dir, "done", "ok", true);
+  const { bridge, calls, native, cwd, until, rpc, background } = harness;
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: offPeakOptions,
+    instructionMode: "replace",
+  });
+  const created = record(
+    await native.get("native-1")!.cb!.request("offPeak/create", {
+      title: "Nightly",
+      prompt: "Do the nightly work",
+      model: "glm-4.7",
+    }),
+  );
+  expect(created.ok).toBe(true);
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  await until(() =>
+    calls.some(
+      (c) => c.method === "session/send" && c.params.offPeakRunType === "init",
+    ),
+  );
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "offpeak.json"), "utf8")) as {
+      tasks: Array<Record<string, unknown>>;
+    };
+  await until(() => readStore().tasks[0]?.status === "completed");
+  // Turn settled while the background job was still running: child alive.
+  expect(native.get("native-1")!.closed ?? false).toBe(false);
+  // The background work finishes and the native CLI pushes state; the
+  // owned child is released by the background-settle hook.
+  background.job = {
+    ...(background.job as Record<string, unknown>),
+    status: "completed",
+  };
+  native.get("native-1")!.cb!.notification({
+    method: "state.updated",
+    params: { sessionId: "native-1" },
+  });
+  await until(() => native.get("native-1")!.closed === true);
+  await bridge.close();
+});
+
+it("retakes are single-flight: a concurrent status poll cannot take a second ticket", async () => {
+  const client = fakeClient({
+    states: ["queued", "ready"],
+    batchResult: async (ticketIds) => ({
+      tickets: ticketIds.map((ticketId) => ({
+        ticketId,
+        state: ticketId === "ticket-1" ? "expired" : "queued",
+      })),
+    }),
+  });
+  const realTake = client.takeTicket.bind(client);
+  // Gate only the SECOND take (the retake) with a controllable promise.
+  let gate: Promise<void> | undefined;
+  let openGate: (() => void) | undefined;
+  let takes = 0;
+  client.takeTicket = async (taskId: string) => {
+    takes += 1;
+    if (takes === 2 && gate) await gate;
+    return realTake(taskId);
+  };
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  gate = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+  // Path A: a 3102 expiry triggers a retake that parks on the gate.
+  const expiry = s.completeRun(id, "ticketExpired", "window expired");
+  await new Promise((r) => setTimeout(r, 20));
+  // Path B: a concurrent sync poll sees the OLD ticket expired and also
+  // wants to retake - single-flight must skip it.
+  await s.syncCycle();
+  openGate!();
+  await expiry;
+  expect(client.taken).toEqual([id, id]); // exactly one retake
+  const task = await s.find(id);
+  expect(task?.serverTicketId).toBe("ticket-2");
 });

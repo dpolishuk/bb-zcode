@@ -339,6 +339,8 @@ export function createOffPeakService(options: {
   const dispatching = new Set<string>();
   // Synchronous create-in-flight reservations (create/create race guard).
   const creating = new Set<string>();
+  // In-flight ticket retakes per task (orphan-ticket guard).
+  const retaking = new Set<string>();
 
   function load(): Promise<void> {
     loading ??= (async () => {
@@ -669,6 +671,22 @@ export function createOffPeakService(options: {
     nextPoll?: number,
   ): Promise<void> {
     if (task.status === "paused" || TERMINAL_STATUSES.has(task.status)) return;
+    // Single-flight per task: a 3102 requeue and a concurrent status poll
+    // can both decide to retake; the gateway take is not documented as
+    // idempotent, so a second in-flight take would strand an orphan ticket.
+    if (retaking.has(task.offPeakTaskId)) return;
+    retaking.add(task.offPeakTaskId);
+    try {
+      await retakeExclusive(task, nextPoll);
+    } finally {
+      retaking.delete(task.offPeakTaskId);
+    }
+  }
+
+  async function retakeExclusive(
+    task: StoredOffPeakTask,
+    nextPoll?: number,
+  ): Promise<void> {
     // The caller may hold a stale snapshot (e.g. a delayed status poll for a
     // ticket a concurrent 3102 requeue already replaced): verify the stored
     // task still holds this ticket before consuming a new one.

@@ -415,6 +415,11 @@ export function createBridge(
   const sessions = new Map<string, Session>();
   const constructing = new Set<string>();
   const startingClients = new Map<string, ZCodeConnection>();
+  // Most recent native session identity per thread, surviving session
+  // release: cold dispatch compares a task's bound session against it to
+  // detect threads that were rebound (fork/rewind) after the task was
+  // created - the live-session check alone cannot see that.
+  const threadNativeId = new Map<string, string>();
   const clients = new Set<ZCodeConnection>();
   const accounts = new Map<ZCodeConnection, AccountHost>();
   let skills = "";
@@ -569,6 +574,22 @@ export function createBridge(
     }
   }
 
+  /**
+   * A dispatcher-owned session whose turn settled while background work was
+   * still active was skipped by settle(); once that work goes inactive,
+   * release the child here - nothing else retries it.
+   */
+  function maybeReleaseOwned(session: Session) {
+    if (
+      session.automationOwned &&
+      !session.stopping &&
+      !session.queue.length &&
+      !session.timeline &&
+      !session.background.active
+    )
+      void release(session, false, false).catch(() => undefined);
+  }
+
   function settle(
     session: Session,
     status: "completed" | "failed" | "interrupted",
@@ -682,6 +703,7 @@ export function createBridge(
           }
           session.snapshot = snapshot;
           session.background.update(snapshot.projection);
+          maybeReleaseOwned(session);
           emit(
             session,
             session.usage.context(
@@ -732,7 +754,10 @@ export function createBridge(
     if (frame.method === "state.updated") {
       const p = record(frame.params);
       if (p.sessionId === session.providerThreadId)
-        void session.background.refresh().catch(() => {});
+        void session.background
+          .refresh()
+          .then(() => maybeReleaseOwned(session))
+          .catch(() => {});
       if (
         p.sessionId === session.providerThreadId &&
         session.compacting &&
@@ -1231,6 +1256,24 @@ export function createBridge(
     }
     const at = new Date();
     const existing = sessions.get(entry.threadId);
+    // Same rebind detection as idle-time dispatch: a fork/rebound thread
+    // must never receive the schedule's prompt in the replacement session.
+    const lastKnownAutomation = threadNativeId.get(entry.threadId);
+    if (
+      existing
+        ? existing.providerThreadId !== entry.targetTaskId
+        : lastKnownAutomation !== undefined &&
+          lastKnownAutomation !== entry.targetTaskId
+    ) {
+      await automations
+        .completeRun(
+          id,
+          false,
+          "the thread no longer backs this schedule's session (forked or rebound); recreate the schedule",
+        )
+        .catch(() => undefined);
+      return;
+    }
     if (
       existing &&
       (existing.timeline ||
@@ -1331,7 +1374,15 @@ export function createBridge(
     // Busy bound sessions defer BEFORE any mode write: a rejected send must
     // never switch the user session's permission mode (native guard).
     const existing = sessions.get(task.threadId);
-    if (existing && existing.providerThreadId !== task.boundSessionId) {
+    // Rebind detection covers both shapes: a live session with a different
+    // native id, and a cold thread whose most recent binding (fork/rebind
+    // followed by release) moved away from the task's bound session.
+    const lastKnown = threadNativeId.get(task.threadId);
+    if (
+      existing
+        ? existing.providerThreadId !== task.boundSessionId
+        : lastKnown !== undefined && lastKnown !== task.boundSessionId
+    ) {
       // The bb thread was forked/rebound away from the task's session:
       // sending would run the task's prompt inside the replacement session.
       await offpeak
@@ -1663,6 +1714,7 @@ export function createBridge(
       )
         throw new ProtocolError("ZCode startup session mismatch.", -32602);
       context.nativeSessionId = snapshot.session.sessionId;
+      threadNativeId.set(params.threadId, snapshot.session.sessionId);
       if (
         accountError &&
         !snapshot.settings.model.available.some(
