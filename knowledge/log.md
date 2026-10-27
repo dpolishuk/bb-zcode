@@ -276,3 +276,8 @@
   238 tests, full `npm run check`, live smoke `RUNTIME_VERIFIED`; follow-ups
   recorded (installed-bb eyeball of the workflow snapshot rendering;
   `threadPanelAction` → `experimental_tab` migration needs an SDK bump).
+- 2026-10-27: hardened the journal fold after review (drain `hasMore` pages
+  before terminal close; actor lamps track in-flight nodes instead of going
+  terminal on the first settle) — recorded as invariants in
+  contracts/dynamic-workflow-protocol.md; also keyed the run-history reader
+  cache by workspace+limit.

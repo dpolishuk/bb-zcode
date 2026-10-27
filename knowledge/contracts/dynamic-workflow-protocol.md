@@ -153,6 +153,13 @@ bb's `backgroundTask.workflow` snapshot grammar is 1-based (`agents[].index`
 and `attempt` ≥ 1, `phases[].index` ≥ 1); the plugin fills `agents` from
 folded actor/node states and `phases` from `run-launched.phaseNames`.
 
+Bridge fold invariants (review-hardened in v0.14.0): pages are drained while
+`hasMore` is true before a settled run may close its row (a 25-page cap per
+refresh guards a runaway journal; the `afterSequence` cursor resumes), and
+node settlement is not actor settlement — an actor tracks its in-flight
+nodes and only goes terminal when the last one settles, so a second ask
+reactivates a `done` lamp.
+
 ## Open questions for stage 8/9
 
 - ~~Per-step live status~~ — verified: journal events via the v4 pull (above).
