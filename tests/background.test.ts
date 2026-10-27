@@ -476,6 +476,67 @@ it("hydrates a run discovered after settlement before closing its row", async ()
     ).state,
   ).toBe("done");
 });
+it("waits for the journal when the projection reports completion first", async () => {
+  const deltas: ThreadDelta[] = [];
+  // Refresh 1 folds a mid-run page; the run settles right after the pull.
+  const midRun = journalPage([
+    {
+      type: "actor-created",
+      payload: { actor: { siteId: "actor#2" }, name: "racer" },
+    },
+    {
+      type: "node-dispatched",
+      payload: { instance: { siteId: "ask#2" }, actor: { siteId: "actor#2" } },
+    },
+    { type: "node-executing", payload: { instance: { siteId: "ask#2" } } },
+  ]);
+  // Refresh 2 catches the terminal page the race skipped.
+  const terminal = journalPage([
+    {
+      type: "node-settled",
+      payload: { instance: { siteId: "ask#2" }, outcome: "ok" },
+    },
+    { type: "usage-updated", payload: { spentTokens: 34 } },
+    { type: "run-settled", payload: { status: "completed" } },
+  ]);
+  const pages = [midRun, terminal];
+  const wire: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents")
+        return pages.shift() ?? { events: [], hasMore: false };
+      if (method === "session/read")
+        return {
+          projection: {
+            backgroundJobs: [
+              { taskId: "dwfrun-7", taskKind: "workflow", status: "completed" },
+            ],
+          },
+        };
+      return {};
+    },
+    async close() {},
+  };
+  const tasks = new BackgroundWork(
+    wire,
+    "native",
+    (d) => deltas.push(...d),
+    () => "glm-5.3",
+  );
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-7", taskKind: "workflow", status: "running" },
+    ],
+  });
+  // The projection turns terminal before the journal fold caught up: the
+  // row must stay open instead of closing on stale running lamps.
+  await tasks.refresh();
+  expect(deltas.some((d) => d.kind === "item.close")).toBe(false);
+  expect(tasks.active).toBe(true);
+  await tasks.refresh();
+  const closed = deltas.find((d) => d.kind === "item.close");
+  expect(closed?.status).toBe("completed");
+  expect(record(record(closed).item).summary).toBe("completed · 34 tokens");
+});
 it("keeps the workflow row honest when the journal surface is unavailable", async () => {
   const deltas: ThreadDelta[] = [];
   const wire: ZCodeConnection = {

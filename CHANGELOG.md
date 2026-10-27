@@ -45,7 +45,10 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   keys include the `ordinal` (fan-out runs reuse a siteId across runtime
   instances), and a run discovered already-settled now waits for one journal
   pull before closing, so its row carries lamps and final usage instead of
-  an empty fold.
+  an empty fold. A third pass tightened the terminal close to wait for the
+  journal's `run-settled` (not merely a pull attempt): a projection that
+  reports completion while the fold still shows running agents holds the row
+  open one more refresh instead of freezing stale lamps.
 
 ## 0.13.0 — 2026-10-27
 

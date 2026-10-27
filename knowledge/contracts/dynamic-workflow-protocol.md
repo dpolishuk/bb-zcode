@@ -159,8 +159,10 @@ refresh guards a runaway journal; the `afterSequence` cursor resumes), and
 node settlement is not actor settlement — an actor tracks its in-flight
 nodes and only goes terminal when the last one settles, so a second ask
 reactivates a `done` lamp. Identity keys are `siteId#ordinal` (fan-out
-reuses siteIds), and a terminal row closes only after one journal pull —
-including runs first seen already settled.
+reuses siteIds), and a terminal row closes only when the journal reports
+`run-settled` (a persistently failing v4 surface degrades to a run-level
+close) — covering runs first seen already settled and the race where the
+projection turns terminal before the fold catches up.
 
 ## Open questions for stage 8/9
 

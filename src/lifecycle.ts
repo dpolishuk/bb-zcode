@@ -384,8 +384,8 @@ interface RunFold {
   nodeActor: Map<string, string>;
   spentTokens?: number;
   settled?: { status: string; stopReason?: string; message?: string };
-  /** Set once a journal pull was attempted, success or not. */
-  pulled?: boolean;
+  /** True while every pull attempt failed (v4 surface unavailable). */
+  journalFailed?: boolean;
 }
 const newFold = (): RunFold => ({
   afterSequence: -1,
@@ -664,11 +664,14 @@ export class BackgroundWork {
       const previous = this.jobs.get(id),
         key = { providerItemId: `zcode-work-${id}` };
       if (previous && !previous.open) continue;
-      // A terminal workflow row closes only after its journal was pulled at
-      // least once: a run discovered already-settled would otherwise close
-      // on an empty fold (no lamps, no final usage), and polling never
-      // repairs a closed row.
-      const hydrating = isWorkflowRun && !runFold?.pulled;
+      // A terminal workflow row closes only once the journal confirms
+      // `run-settled` (or the v4 surface is confirmed unavailable, degrading
+      // to a run-level close). A run discovered already-settled, or a
+      // projection that reports completion before the journal fold caught
+      // up, waits one more refresh — a closed row can never be repaired.
+      const hydrating =
+        isWorkflowRun &&
+        !(runFold && (runFold.settled || runFold.journalFailed));
       if (!previous) this.emit([{ kind: "item.open", key, item }]);
       if (!pending && (!previous || previous.open) && !hydrating)
         this.emit([{ kind: "item.close", key, item, status }]);
@@ -724,6 +727,9 @@ export class BackgroundWork {
     for (const [runId, fold] of this.runs) {
       if (fold.settled) continue;
       try {
+        // A working pull clears an earlier failure, so only a persistently
+        // unavailable surface degrades the terminal close.
+        fold.journalFailed = false;
         // The cap guards a runaway journal; the cursor resumes next refresh.
         for (let page = 0; page < 25; page++) {
           const reply = record(
@@ -750,12 +756,9 @@ export class BackgroundWork {
           if (reply.hasMore !== true || events.length === 0) break;
         }
       } catch {
-        /* lamps need the journal; the status row survives without them */
-      } finally {
-        // Even a failed attempt counts as hydration: a discovered-terminal
-        // run may then close, degraded to run-level status when the journal
-        // surface is unavailable.
-        fold.pulled = true;
+        // A failing pull marks the journal surface unavailable for this run:
+        // a terminal projection may then close degraded to run-level status.
+        fold.journalFailed = true;
       }
     }
   }
