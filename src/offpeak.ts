@@ -877,16 +877,23 @@ export function createOffPeakService(options: {
     const current = await find(id);
     if (!current || TERMINAL_STATUSES.has(current.status)) return;
     const at = now().getTime();
+    // A cancel can land between the snapshot above and each mutation below
+    // (mutate yields); terminal states must never be overwritten from a
+    // stale pre-check, so every completion mutation re-verifies inside.
     if (outcome === "completed") {
-      await mutate(id, (t) => ({
-        ...t,
-        status: "completed",
-        ranOnce: true,
-        startedAt: t.startedAt ?? at,
-        endedAt: at,
-        transientFailures: 0,
-        deferred: 0,
-      }));
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "completed",
+              ranOnce: true,
+              startedAt: t.startedAt ?? at,
+              endedAt: at,
+              transientFailures: 0,
+              deferred: 0,
+            },
+      );
       return;
     }
     if (outcome === "ticketExpired") {
@@ -898,39 +905,51 @@ export function createOffPeakService(options: {
       const replaced =
         executionTicket !== undefined &&
         current.serverTicketId !== executionTicket;
-      await mutate(id, (t) => ({
-        ...t,
-        status: "queued",
-        ranOnce: true,
-        schedulable: false,
-        startedAt: t.startedAt ?? at,
-        deferred: 0,
-        ...(message ? { failureReason: message } : {}),
-      }));
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "queued",
+              ranOnce: true,
+              schedulable: false,
+              startedAt: t.startedAt ?? at,
+              deferred: 0,
+              ...(message ? { failureReason: message } : {}),
+            },
+      );
       if (replaced) return;
       const fresh = await find(id);
-      if (fresh) await retake(fresh);
+      if (fresh && !TERMINAL_STATUSES.has(fresh.status)) await retake(fresh);
       return;
     }
     const failures = (current.transientFailures ?? 0) + 1;
     if (failures >= 3 || options?.permanent)
-      await mutate(id, (t) => ({
-        ...t,
-        status: "failed",
-        ranOnce: t.ranOnce ?? true,
-        endedAt: at,
-        failureReason: message ?? "Run failed",
-      }));
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "failed",
+              ranOnce: t.ranOnce ?? true,
+              endedAt: at,
+              failureReason: message ?? "Run failed",
+            },
+      );
     else
-      await mutate(id, (t) => ({
-        ...t,
-        status: "queued",
-        ranOnce: t.ranOnce ?? false,
-        schedulable: false,
-        transientFailures: failures,
-        nextDispatchAt: at + 30_000,
-        ...(message ? { failureReason: message } : {}),
-      }));
+      await mutate(id, (t) =>
+        TERMINAL_STATUSES.has(t.status)
+          ? t
+          : {
+              ...t,
+              status: "queued",
+              ranOnce: t.ranOnce ?? false,
+              schedulable: false,
+              transientFailures: failures,
+              nextDispatchAt: at + 30_000,
+              ...(message ? { failureReason: message } : {}),
+            },
+      );
   }
 
   async function cancel(id: string, cwd: string): Promise<boolean> {
