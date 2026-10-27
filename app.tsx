@@ -77,6 +77,22 @@ function WorkflowGraphRow({ payload, Original }: PluginTimelineRendererProps) {
       {!useGraph && (p.state === "failed" || p.error) && p.error ? (
         <div style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{p.error}</div>
       ) : null}
+      {/* The summary carries the compile diagnostics on a failed launch and
+          the run text when no graph exists; with a graph the Original base
+          already shows the one-line outcome. */}
+      {!useGraph && p.summary ? (
+        <div
+          style={{
+            fontSize: 12,
+            whiteSpace: "pre-wrap",
+            opacity: 0.85,
+            maxHeight: 180,
+            overflowY: "auto",
+          }}
+        >
+          {p.summary}
+        </div>
+      ) : null}
       {p.runId || p.scriptPath ? (
         <div
           style={{

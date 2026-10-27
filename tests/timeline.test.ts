@@ -529,3 +529,43 @@ it("marks a workflow result event that reports failure as failed", () => {
   for (const d of deltas)
     expect(threadDeltaSchema.safeParse(d).success).toBe(true);
 });
+
+it("marks a compile failure carried by the display flags as failed", () => {
+  const deltas: ThreadDelta[] = [];
+  const timeline = new Timeline((d) => deltas.push(...d), "/w");
+  timeline.event("tool.updated", {
+    kind: "scheduled",
+    toolCallId: "wf-5",
+    toolName: "CreateWorkflow",
+    input: { script: 'const meta = { name: "broken" };' },
+  });
+  // POC-verified shape: a failed compile is a SUCCESSFUL tool call whose
+  // display reports ok:false / errorCount>0 - the envelope must not decide.
+  timeline.event("tool.updated", {
+    kind: "result",
+    toolCallId: "wf-5",
+    result: {
+      success: true,
+      content: "The workflow script has errors: `export` is not allowed.",
+      display: {
+        kind: "create_workflow",
+        ok: false,
+        errorCount: 1,
+        diagnostics: [
+          { message: "`export` is not allowed in a workflow script" },
+        ],
+      },
+    },
+  });
+  const close = deltas.find((d) => d.kind === "item.close")!;
+  expect(close.status).toBe("failed");
+  const payload = (close.item as { payload: Record<string, unknown> }).payload;
+  expect(payload.state).toBe("failed");
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toBe("Workflow script has errors (1).");
+  // The diagnostics text rides in the summary for the renderer fallback.
+  expect(String(payload.summary)).toContain("workflow script has errors");
+  expect(payload.graph).toBeUndefined();
+  for (const d of deltas)
+    expect(threadDeltaSchema.safeParse(d).success).toBe(true);
+});

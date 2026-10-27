@@ -22,7 +22,7 @@
   work: they need a native run-status event stream (the bridge's
   `backgroundTask.workflow` snapshot grammar is ready for it).
 
-## 0.12.0 — 2026-10-27 — 2026-10-27
+## 0.12.0 — 2026-10-27
 
 - Open ZCode's native dynamic workflows to plugin sessions (roadmap stage
   8). A new `dynamicWorkflowsEnabled` setting (off by default) sends

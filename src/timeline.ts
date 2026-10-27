@@ -98,17 +98,27 @@ export function workflowPayloadDone(
       ? record(display.causalityGraph)
       : undefined;
   const graphBytes = graph ? JSON.stringify(graph).length : 0;
+  // A failed compile arrives as a successful tool call whose display says
+  // ok:false / errorCount>0 (POC-verified: `success` stays true), so the
+  // display flags - not the tool envelope - decide the terminal state.
+  const isCreateDisplay = display.kind === "create_workflow";
+  const errorCount = isCreateDisplay ? Number(display.errorCount) || 0 : 0;
+  const displayFailed =
+    isCreateDisplay && (display.ok === false || errorCount > 0);
+  const failed = Boolean(error) || displayFailed;
+  const failureMessage =
+    error ??
+    (displayFailed
+      ? `Workflow script has errors${errorCount > 0 ? ` (${errorCount})` : ""}.`
+      : undefined);
   return {
     v: 1,
-    state: error ? "failed" : "done",
-    ok:
-      display.kind === "create_workflow"
-        ? display.ok !== false
-        : r.success !== false,
+    state: failed ? "failed" : "done",
+    ok: isCreateDisplay ? display.ok !== false : r.success !== false,
     ...(content ? { summary: content.slice(0, 2000) } : {}),
     ...(runId ? { runId } : {}),
     ...(scriptPath ? { scriptPath } : {}),
-    ...(error ? { error: error.slice(0, 2000) } : {}),
+    ...(failureMessage ? { error: failureMessage.slice(0, 2000) } : {}),
     ...(graph && graphBytes <= 256 * 1024
       ? { graph }
       : graph
@@ -404,7 +414,7 @@ export class Timeline {
             {
               kind: "item.close",
               key,
-              status: error ? "failed" : "completed",
+              status: payload.state === "failed" ? "failed" : "completed",
               item: {
                 type: "extension",
                 kind: WORKFLOW_GRAPH_EXTENSION_KIND,
