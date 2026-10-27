@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.14.0 — 2026-10-27
+
+- Close roadmap stage 9 with live run tracking and the bb-side surfaces
+  (v2). While a dynamic workflow runs, the bridge now emits a native
+  `backgroundTask` row (`local_workflow`) instead of leaving the closed
+  CreateWorkflow row as the only trace: the run appears in the session
+  projection's background jobs (POC-verified on CLI 0.17.0 - `taskKind
+"workflow"`, cancellable while running), and per-refresh cursor-paged
+  reads of `v4/conversation/workflowRunEvents` fold the run journal into
+  bb's workflow snapshot grammar - live per-agent lamps (queued/running/
+  done/failed/skipped) with phase titles, and an honest terminal summary
+  (`status (stopReason) · N tokens`). The journal is the same source the
+  Desktop consumes; if the surface is missing the row degrades to
+  run-level status only.
+- A workflows hub and a per-thread run pane join the frontend: the sidebar
+  `Workflows` panel and the thread panel action both list persisted run
+  history (status, tokens, updated time, artifact chips) through a new
+  `workflowRuns` RPC. The handler resolves the thread/project checkout via
+  the bb SDK and cold-reads `workflows/runs` with a short-lived sessionless
+  CLI process - the store outlives any thread, so history lists cross-thread;
+  reads are single-flight with a 3 s TTL because a spawn is the cost.
+- Verification: POC probes captured mid-run `backgroundJobs` rows and the
+  journal event grammar (`run-launched`/`actor-created`/`node-*`/`usage-
+updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
+  no nodes for ask-only scripts, so lamps fold from journal events instead.
+  14 background/foundation tests cover the fold, the degraded path and the
+  reader; full `npm run check` and the live CLI smoke (`RUNTIME_VERIFIED`)
+  pass. Note: `threadPanelAction` is retired in newer SDK typings (still
+  supported); migrating to `experimental_tab` needs an SDK bump and stays
+  follow-up work.
+
 ## 0.13.0 — 2026-10-27
 
 - Render dynamic workflows in the timeline (roadmap stage 9, v1). The

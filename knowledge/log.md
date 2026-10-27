@@ -257,3 +257,22 @@
 - **Fixed** v0.9.4 provider mark geometry: terminal cuts are now parallel and
   lean the same way as the ZCode app mark (top-left and bottom-right tips
   lead), with reference-matched bar and diagonal weights.
+- **Added** Stage 9 v2 live-status sources to the
+  [dynamic workflow contract](contracts/dynamic-workflow-protocol.md),
+  POC-verified mid-run on CLI 0.17.0: dynamic runs surface in
+  `session/read` `projection.backgroundJobs` (`taskKind: "workflow"`,
+  taskId = runId, cancellable while running), and
+  `v4/conversation/workflowRunEvents` exposes the run journal with a
+  sequence cursor (`run-launched`/`actor-created`/`node-*`/`usage-updated`/
+  `run-settled`) - the same feed the Desktop lamps consume.
+  `v4/conversation/workflowRunWorkspace` returned no nodes for ask-only
+  scripts, so lamps fold from journal events. Also pinned: bb's
+  `backgroundTask.workflow` grammar is 1-based (index/attempt ≥ 1).
+- **Updated** v0.14.0 closed roadmap stage 9: `BackgroundWork` maps workflow
+  jobs to a `local_workflow` `backgroundTask` row with journal-fed agent
+  lamps and an honest terminal summary; the sidebar Workflows hub and the
+  thread run pane list persisted history via a `workflowRuns` RPC
+  (sessionless cold `workflows/runs` read, single-flight 3 s TTL). Baseline:
+  238 tests, full `npm run check`, live smoke `RUNTIME_VERIFIED`; follow-ups
+  recorded (installed-bb eyeball of the workflow snapshot rendering;
+  `threadPanelAction` → `experimental_tab` migration needs an SDK bump).

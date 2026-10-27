@@ -155,7 +155,7 @@ bridge never syncs a workspace policy, while older supported CLIs (0.16.9)
 validate params strictly and would reject the unknown field. Wire details:
 [workflow contract](../contracts/dynamic-workflow-protocol.md) (draft).
 
-## Stage 9 — dynamic workflow visualization (v1 shipped in v0.13.0)
+## Stage 9 — dynamic workflow visualization (v1 v0.13.0, closed by v2 in v0.14.0)
 
 The ZCode timeline is drawn from one structured `causalityGraph` payload
 that rides the ordinary `CreateWorkflow` tool result - no new event channel
@@ -166,9 +166,21 @@ is readable cross-process with `parentSessionId`+`toolCallId` deep-link keys.
 v0.13.0 shipped the v1: the plugin's first frontend bundle (`app.tsx` →
 `dist/app.js`) registers the renderer for the `zcode/workflow-graph`
 extension item the bridge emits from the `create_workflow` display
-payload. Live per-step lamps, the run pane and the hub remain open: they
-need a native run-status event stream (bb's `backgroundTask.workflow`
-snapshot grammar is the ready landing zone).
+payload. v0.14.0 closed the stage: the run now also tracks live through a
+native `backgroundTask` (`local_workflow`) row - the bridge polls the
+session projection (the run appears as a `taskKind: "workflow"` background
+job) and folds cursor-paged `v4/conversation/workflowRunEvents` journal
+events into bb's `workflow` snapshot grammar (per-agent lamps with phase
+titles, terminal `status · tokens` summary), degrading to run-level status
+when the journal surface is absent. The sidebar `Workflows` hub and the
+thread run pane list persisted history through a `workflowRuns` RPC that
+cold-reads `workflows/runs` with a short-lived sessionless CLI (single
+flight, 3 s TTL). Wire details:
+[workflow contract](../contracts/dynamic-workflow-protocol.md). Remaining
+follow-up: bb's native rendering of the workflow snapshot is
+schema-validated but not yet eyeballed in an installed bb run, and
+`threadPanelAction` is retired in newer SDK typings (migration needs an SDK
+bump).
 
 ## Out of scope for this plugin
 

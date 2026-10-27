@@ -1,7 +1,7 @@
 ---
 type: contract
 title: Dynamic workflow protocol (POC-verified)
-description: Wire contract for ZCode dynamic workflows as exercised against the installed CLI 0.17.0 - gate, tool family, skill gate, approval, display payload, completion notification, and the cross-process run read API.
+description: Wire contract for ZCode dynamic workflows as exercised against the installed CLI 0.17.0 - gate, tool family, skill gate, approval, display payload, completion notification, the cross-process run read API, and the POC-verified live-status sources (projection background jobs + v4 run journal events).
 status: draft
 stale_after: 2027-02-27T00:00:00Z
 tags: [contract, protocol, workflow, visualization]
@@ -117,16 +117,54 @@ Verified cold from a second CLI process against the persisted store:
 The store outlives the thread's CLI process, so a bb-side hub/pane can read
 run history from any live session without the original thread.
 
+## Live run status (POC-verified 2026-10-27, CLI 0.17.0)
+
+Three host-visible sources, exercised mid-run with the loopback fixture:
+
+- **Session projection background jobs.** A launched run registers in the
+  session's runtime task registry and appears in `session/read`
+  `projection.backgroundJobs` as `{taskId: <runId>, toolCallId, toolName:
+"CreateWorkflow", taskKind: "workflow", cancellable: true|false, status:
+"running"→"completed"|"failed"|"cancelled", startedAt, completedAt}`.
+  `cancellable` flips false at settle. The bridge's `BackgroundWork` polls
+  this at 1 s and now maps `taskKind: "workflow"` rows to bb's
+  `backgroundTask`/`local_workflow` item.
+- **Run journal events** (the lamp source; same feed the Desktop consumes):
+  `v4/conversation/workflowRunEvents {sessionId, runId, afterSequence?,
+limit?}` → `{events: [{sequence, type, payload}], hasMore}` with a
+  sequence cursor. Observed grammar: `run-started` (caps), `run-launched`
+  (`phaseNames[]`, `scriptPath`, `parentSessionId`, `toolCallId`),
+  `phase-entered {name, ordinal}`, `actor-created {actor{siteId,ordinal},
+name, persona, phaseName}`, `node-queued`/`node-dispatched` (instance +
+  actor + `instructionsHead` + `phaseName`), `node-executing {instance}`,
+  plus `node-waiting`/`node-repairing`/`node-nudged`/`node-settled`
+  (outcome ok|failed|cancelled, cached), `node-progress`, `usage-updated
+{spentTokens}`, `hole-reached`/`hole-filled`, `artifact-published`,
+  `run-settled {status, stopReason?, error?}`. Settle events may omit the
+  actor, so fold node→actor edges from dispatch events.
+- **v4 run rows**: `v4/conversation/workflowRuns {sessionId, limit}` →
+  `{runs: [{runId, toolCallId?, label?, updatedAt?, status, stopReason?,
+failureCode/Message?, resumable}]}` (session-scoped, no usage).
+  `v4/conversation/workflowRunWorkspace` returned **no nodes** for an
+  ask-only two-phase script (live and post-run) — workspace nodes are not a
+  reliable lamp source; fold the journal instead.
+
+bb's `backgroundTask.workflow` snapshot grammar is 1-based (`agents[].index`
+and `attempt` ≥ 1, `phases[].index` ≥ 1); the plugin fills `agents` from
+folded actor/node states and `phases` from `run-launched.phaseNames`.
+
 ## Open questions for stage 8/9
 
-- Per-step **live** status during a run: `workflows/runs` polling is proven;
-  whether Desktop's per-step lamp stream reaches an app-server host (v4
-  subscriptions?) is unverified.
+- ~~Per-step live status~~ — verified: journal events via the v4 pull (above).
 - `model_bindings` validation, holes/`FillWorkflowHole` round trip,
   `AmendWorkflow`, `ResumeWorkflowRun`, and fan-out (`Promise.all`)
   topologies are unexercised.
 - Subagent child sessions: no parent-stream events observed (children are
   invisible to the owning session's subscription beyond the notification).
+- bb's own rendering of the `workflow` snapshot grammar is not yet verified
+  in an installed bb run (only the delta grammar is schema-validated); the
+  row degrades honestly to run-level status if the journal surface is
+  missing.
 
 ## Related knowledge
 

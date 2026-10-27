@@ -1,5 +1,13 @@
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
-import type { PluginTimelineRendererProps } from "@get-bb/plugin-sdk/app";
+import type {
+  PluginTimelineRendererProps,
+  PluginNavPanelProps,
+  PluginThreadPanelProps,
+} from "@get-bb/plugin-sdk/app";
+import { useBbContext, useRpc } from "@get-bb/plugin-sdk/app";
+import { useEffect, useState } from "react";
+import type { workflowRunsRpcContract } from "./src/runsContract.js";
+import type { WorkflowRunView } from "./src/runsContract.js";
 
 /**
  * Renders the dynamic-workflow rows the bridge emits as the plugin's own
@@ -292,4 +300,194 @@ export default definePluginApp((app) => {
     kind: "zcode/workflow-graph",
     component: WorkflowGraphRow,
   });
+  // The workflows hub: run history for the project in view, read cross-thread
+  // from the persisted run store via the plugin's sessionless RPC.
+  app.slots.navPanel({
+    id: "workflows",
+    title: "Workflows",
+    icon: "Workflow",
+    path: "workflows",
+    component: WorkflowHub,
+  });
+  // Per-thread run pane: the same history scoped by the thread's checkout.
+  app.slots.threadPanelAction({
+    id: "workflow-runs",
+    title: "ZCode workflow runs",
+    icon: "Workflow",
+    component: WorkflowRunPane,
+  });
 });
+
+type RunRow = WorkflowRunView;
+
+type RunsState = {
+  runs: RunRow[];
+  truncated: boolean;
+  error?: string;
+  loading: boolean;
+};
+
+/** Poll the plugin's workflowRuns RPC; each cold read spawns a short CLI. */
+function useWorkflowRuns(
+  input: { threadId?: string; projectId?: string } | null,
+): RunsState & { refresh: () => void } {
+  const rpc = useRpc<typeof workflowRunsRpcContract>();
+  const [state, setState] = useState<RunsState>({
+    runs: [],
+    truncated: false,
+    loading: false,
+  });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!input) return;
+    let cancelled = false;
+    setState((previous) => ({ ...previous, loading: true }));
+    rpc
+      .call("workflowRuns", {
+        threadId: input.threadId,
+        projectId: input.projectId,
+        limit: 50,
+      })
+      .then((reply) => {
+        if (cancelled) return;
+        setState({
+          runs: reply.runs ?? [],
+          truncated: reply.truncated === true,
+          loading: false,
+        });
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setState({
+          runs: [],
+          truncated: false,
+          loading: false,
+          error: error.message,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Slow auto-refresh: a cold read spawns a CLI process, so the poll only
+    // paces live tailing; manual refresh covers the rest.
+  }, [rpc, input?.threadId, input?.projectId, tick]);
+  useEffect(() => {
+    if (!input) return;
+    const timer = setInterval(() => setTick((n) => n + 1), 15_000);
+    return () => clearInterval(timer);
+  }, [input?.threadId, input?.projectId]);
+  return { ...state, refresh: () => setTick((n) => n + 1) };
+}
+
+const statusTone = (status: string): string =>
+  status === "completed"
+    ? "●"
+    : status === "errored"
+      ? "✕"
+      : status === "stopped"
+        ? "◼"
+        : status === "running"
+          ? "◐"
+          : "○";
+
+function RunsTable({ state }: { state: RunsState }) {
+  if (state.error)
+    return <div style={{ fontSize: 13, opacity: 0.85 }}>{state.error}</div>;
+  if (!state.runs.length && !state.loading)
+    return (
+      <div style={{ fontSize: 13, opacity: 0.7 }}>
+        No ZCode dynamic-workflow runs in this workspace yet.
+      </div>
+    );
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      {state.runs.map((run) => (
+        <div
+          key={run.runId}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto 1fr auto",
+            gap: 8,
+            alignItems: "baseline",
+            fontSize: 12,
+            borderBottom: "1px solid",
+            borderBottomColor: "currentColor",
+            paddingBottom: 4,
+            opacity: 0.9,
+          }}
+        >
+          <span title={run.status} aria-label={run.status}>
+            {statusTone(run.status)}
+          </span>
+          <span style={{ overflowWrap: "anywhere" }}>
+            {run.name ?? run.runId}
+            {run.stopReason ? (
+              <span style={{ opacity: 0.6 }}> ({run.stopReason})</span>
+            ) : null}
+            <span style={{ opacity: 0.55, display: "block" }}>
+              {run.runId}
+              {run.spentTokens !== undefined
+                ? ` · ${run.spentTokens} tokens`
+                : ""}
+              {run.updatedAt
+                ? ` · ${new Date(run.updatedAt).toLocaleString()}`
+                : ""}
+            </span>
+          </span>
+          <span style={{ opacity: 0.6 }}>
+            {run.artifacts?.length ? `${run.artifacts.length} artifact(s)` : ""}
+          </span>
+        </div>
+      ))}
+      {state.truncated ? (
+        <div style={{ fontSize: 11, opacity: 0.6 }}>Older runs truncated.</div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkflowHub({}: PluginNavPanelProps) {
+  const { projectId } = useBbContext();
+  const state = useWorkflowRuns(projectId ? { projectId } : null);
+  return (
+    <div style={{ display: "grid", gap: 10, padding: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <strong style={{ fontSize: 14 }}>ZCode workflow runs</strong>
+        <span style={{ fontSize: 11, opacity: 0.6 }}>
+          persisted history, read cross-thread
+        </span>
+        <button
+          onClick={state.refresh}
+          style={{ marginLeft: "auto", fontSize: 12 }}
+        >
+          {state.loading ? "Reading…" : "Refresh"}
+        </button>
+      </div>
+      {!projectId ? (
+        <div style={{ fontSize: 13, opacity: 0.7 }}>
+          Select a project to list its workflow runs.
+        </div>
+      ) : (
+        <RunsTable state={state} />
+      )}
+    </div>
+  );
+}
+
+function WorkflowRunPane({ threadId }: PluginThreadPanelProps) {
+  const state = useWorkflowRuns(threadId ? { threadId } : null);
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>Workflow runs</strong>
+        <button
+          onClick={state.refresh}
+          style={{ marginLeft: "auto", fontSize: 12 }}
+        >
+          {state.loading ? "Reading…" : "Refresh"}
+        </button>
+      </div>
+      <RunsTable state={state} />
+    </div>
+  );
+}

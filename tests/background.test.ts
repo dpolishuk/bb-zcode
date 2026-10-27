@@ -78,3 +78,157 @@ it("preserves running work on partial snapshots that omit the task projection", 
     ),
   ).toBe(true);
 });
+
+/** Journal event fixture shaped like the POC captures (CLI 0.17.0). */
+const journalPage = (events: Array<{ type: string; payload: unknown }>) => ({
+  events: events.map((event, sequence) => ({
+    sequence,
+    type: event.type,
+    payload: event.payload,
+  })),
+  hasMore: false,
+});
+it("renders a dynamic-workflow run as a local_workflow task with agent lamps", async () => {
+  const deltas: ThreadDelta[] = [];
+  let events = journalPage([
+    {
+      type: "run-launched",
+      payload: { phaseNames: ["first", "second"] },
+    },
+    {
+      type: "actor-created",
+      payload: {
+        actor: { siteId: "actor#1" },
+        name: "one",
+        phaseName: "first",
+      },
+    },
+    {
+      type: "node-dispatched",
+      payload: { instance: { siteId: "ask#1" }, actor: { siteId: "actor#1" } },
+    },
+    { type: "node-executing", payload: { instance: { siteId: "ask#1" } } },
+  ]);
+  const wire: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents") return events;
+      if (method === "session/read")
+        return {
+          projection: {
+            backgroundJobs: [
+              {
+                taskId: "dwfrun-1",
+                toolName: "CreateWorkflow",
+                taskKind: "workflow",
+                status: "running",
+                cancellable: true,
+              },
+            ],
+          },
+        };
+      return {};
+    },
+    async close() {},
+  };
+  const tasks = new BackgroundWork(
+    wire,
+    "native",
+    (d) => deltas.push(...d),
+    () => "glm-5.3",
+  );
+  // First projection opens the run-level row before any journal pull.
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-1", taskKind: "workflow", status: "running" },
+    ],
+  });
+  const opened = record(record(deltas[0]).item);
+  expect(opened.taskType).toBe("local_workflow");
+  expect(opened.workflow).toBeUndefined();
+  // The next refresh folds the journal into the live agent lamps.
+  await tasks.refresh();
+  const progress = deltas.find((d) => d.kind === "item.progress");
+  const snapshot = record(record(record(progress).snapshot).workflow);
+  expect(snapshot.phases).toEqual([
+    { index: 1, title: "first" },
+    { index: 2, title: "second" },
+  ]);
+  const agent = record((snapshot.agents as unknown[])[0]);
+  expect(agent.label).toBe("one");
+  expect(agent.state).toBe("running");
+  expect(agent.model).toBe("glm-5.3");
+  expect(agent.phaseTitle).toBe("first");
+  expect(agent.phaseIndex).toBe(1);
+  expect(
+    threadDeltaNotificationParamsSchema.safeParse({ threadId: "bb", deltas })
+      .success,
+  ).toBe(true);
+  // Terminal journal + registry row close the row with an honest summary.
+  events = journalPage([
+    {
+      type: "node-settled",
+      payload: { instance: { siteId: "ask#1" }, outcome: "ok" },
+    },
+    { type: "usage-updated", payload: { spentTokens: 34 } },
+    { type: "run-settled", payload: { status: "completed" } },
+  ]);
+  wire.request = async (method: string) => {
+    if (method === "v4/conversation/workflowRunEvents") return events;
+    if (method === "session/read")
+      return {
+        projection: {
+          backgroundJobs: [
+            {
+              taskId: "dwfrun-1",
+              taskKind: "workflow",
+              status: "completed",
+              cancellable: false,
+            },
+          ],
+        },
+      };
+    return {};
+  };
+  await tasks.refresh();
+  const closed = deltas.find((d) => d.kind === "item.close");
+  expect(closed?.status).toBe("completed");
+  const closedItem = record(record(closed).item);
+  expect(closedItem.taskType).toBe("local_workflow");
+  expect(closedItem.summary).toBe("completed · 34 tokens");
+  expect(
+    record((record(closedItem.workflow).agents as unknown[])[0]).state,
+  ).toBe("done");
+  expect(tasks.active).toBe(false);
+});
+it("keeps the workflow row honest when the journal surface is unavailable", async () => {
+  const deltas: ThreadDelta[] = [];
+  const wire: ZCodeConnection = {
+    async request(method: string) {
+      if (method === "v4/conversation/workflowRunEvents")
+        throw new Error("unsupported");
+      if (method === "session/read")
+        return {
+          projection: {
+            backgroundJobs: [
+              { taskId: "dwfrun-2", taskKind: "workflow", status: "running" },
+            ],
+          },
+        };
+      return {};
+    },
+    async close() {},
+  };
+  const tasks = new BackgroundWork(wire, "native", (d) => deltas.push(...d));
+  tasks.update({
+    backgroundJobs: [
+      { taskId: "dwfrun-2", taskKind: "workflow", status: "running" },
+    ],
+  });
+  await tasks.refresh();
+  const items = deltas.map((d) => record(d).item).filter(Boolean);
+  for (const item of items)
+    expect(record(item).taskType).toBe("local_workflow");
+  expect(items.every((item) => record(item).workflow === undefined)).toBe(true);
+  expect(tasks.active).toBe(true);
+  tasks.close("interrupted");
+});
