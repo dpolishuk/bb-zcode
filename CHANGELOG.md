@@ -55,7 +55,11 @@ updated`/`run-settled`); `v4/conversation/workflowRunWorkspace` returned
   whole CLI session (`fail()` + `close()`), `ZCodeClient.request` gained a
   read-only mode: journal and `session/read` polls time out non-fatally
   (the late reply is dropped), while mutating requests keep the fail-fast
-  behavior.
+  behavior. Follow-ups from the same pass: a closed workflow row drops its
+  fold so polling stops serving (and serially blocking on) journals nobody
+  reads, and the sessionless run reader rejects reverse host requests
+  asynchronously — a synchronous throw escaped the transport's stdout
+  handler instead of becoming the denial reply.
 
 ## 0.13.0 — 2026-10-27
 

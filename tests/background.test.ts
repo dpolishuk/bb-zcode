@@ -584,10 +584,13 @@ it("retries a transient journal timeout and degrades only after persistent failu
   // A persistently failing surface still degrades: three consecutive
   // failures let a terminal row close run-level, without usage.
   const deltas2: ThreadDelta[] = [];
+  let deadPulls = 0;
   const dead: ZCodeConnection = {
     async request(method: string) {
-      if (method === "v4/conversation/workflowRunEvents")
+      if (method === "v4/conversation/workflowRunEvents") {
+        deadPulls++;
         throw new Error("unsupported");
+      }
       if (method === "session/read") return projection();
       return {};
     },
@@ -611,6 +614,11 @@ it("retries a transient journal timeout and degrades only after persistent failu
   const degraded = deltas2.find((d) => d.kind === "item.close");
   expect(degraded?.status).toBe("completed");
   expect(record(record(degraded).item).summary).toBeUndefined();
+  // The closed row is never repaired, so later refreshes must stop polling
+  // its journal instead of serially blocking live runs.
+  expect(deadPulls).toBe(3);
+  await tasks2.refresh();
+  expect(deadPulls).toBe(3);
 });
 it("keeps the workflow row honest when the journal surface is unavailable", async () => {
   const deltas: ThreadDelta[] = [];

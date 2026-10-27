@@ -60,3 +60,14 @@ it("lets a read-only status poll time out without killing the session", async ()
     await peer.close();
   }
 });
+it("delivers an async reverse-request denial as a reply and keeps serving", async () => {
+  // The peer answers only after its reverse request got the denial reply;
+  // an asynchronously rejecting callback must produce that reply instead of
+  // escaping the stdout handler.
+  const peer = client("reverse");
+  try {
+    expect(await peer.request("echo", {}, 2000)).toBe("ok");
+  } finally {
+    await peer.close();
+  }
+});

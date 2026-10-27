@@ -87,7 +87,9 @@ export async function readWorkflowRuns(
           notification() {},
           // A sessionless store read has no turn to anchor host requests; the
           // CLI only needs the reply shape, and a denial keeps it moving.
-          request: (method) => {
+          // Must reject asynchronously: a synchronous throw escapes the
+          // transport's stdout handler instead of becoming the reply.
+          request: async (method) => {
             throw new Error(`Sessionless run read cannot answer ${method}.`);
           },
           exit() {},

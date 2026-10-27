@@ -684,9 +684,12 @@ export class BackgroundWork {
           (runFold.settled || runFold.journalFailures >= JOURNAL_FAILURE_LIMIT)
         );
       if (!previous) this.emit([{ kind: "item.open", key, item }]);
-      if (!pending && (!previous || previous.open) && !hydrating)
+      if (!pending && (!previous || previous.open) && !hydrating) {
         this.emit([{ kind: "item.close", key, item, status }]);
-      else if (
+        // A closed row is never repaired; drop its fold so polling stops
+        // serving (and serially blocking on) journals nobody reads.
+        if (isWorkflowRun) this.runs.delete(id);
+      } else if (
         (pending || hydrating) &&
         previous?.open &&
         JSON.stringify(previous.item) !== JSON.stringify(item)
@@ -743,6 +746,10 @@ export class BackgroundWork {
    */
   private async pullWorkflowEvents() {
     for (const [runId, fold] of this.runs) {
+      // Closed rows (degraded or settled) are never repaired; skip their
+      // folds so a dead journal cannot block live runs' refreshes.
+      const tracked = this.jobs.get(runId);
+      if (tracked && !tracked.open) continue;
       if (fold.settled) continue;
       try {
         // The cap guards a runaway journal; the cursor resumes next refresh.
