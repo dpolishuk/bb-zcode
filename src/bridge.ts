@@ -1719,6 +1719,10 @@ export function createBridge(
           ...(disallowedTools.length ? { toolDenylist: disallowedTools } : {}),
           // Idle-time tools register only when the host implements the ports.
           ...(settings.offPeakTasksEnabled ? { offPeakToolEnabled: true } : {}),
+          // The dynamic-workflow gate is fail-closed on the native side; send
+          // an explicit boolean so create and cold resume agree even if the
+          // CLI process ever caches a workspace-level policy.
+          dynamicWorkflowEnabled: settings.dynamicWorkflowsEnabled,
         },
       );
       const snapshot = snapshotSchema.parse(response);

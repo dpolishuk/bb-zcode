@@ -1,5 +1,15 @@
 # Knowledge log
 
+## 2026-10-27 (v0.12.0, feat/dynamic-workflows branch)
+
+- **Added** `dynamicWorkflowsEnabled` setting (off by default): an explicit
+  `dynamicWorkflowEnabled` boolean on session create and resume opens the
+  native fail-closed dynamic-workflow gate (roadmap stage 8). The boolean is
+  never omitted so a cold resume cannot inherit a stale workspace-level
+  policy from the CLI process. 4 focused tests (parsing, create on/off,
+  resume); `npm run check` 228 green and `test:live` RUNTIME_VERIFIED
+  against CLI 0.17.0 with the new param on the wire.
+
 ## 2026-10-27 (dynamic workflow POC)
 
 - **Verified** end-to-end dynamic workflow launch against the installed CLI

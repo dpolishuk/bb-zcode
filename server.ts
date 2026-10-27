@@ -97,6 +97,13 @@ export default async function plugin(bb: BbPluginApi) {
         "Let ZCode sessions queue idle-time (off-peak) tasks on the Z.ai server and run them when it grants capacity. Requires an individual Coding Plan; runs consume plan quota. Applies to new sessions.",
       default: false,
     },
+    dynamicWorkflowsEnabled: {
+      type: "boolean",
+      label: "ZCode dynamic workflows",
+      description:
+        "Let ZCode sessions author and run dynamic workflows (CreateWorkflow multi-agent orchestration). Workflow subagents run in the background of this bb and consume plan quota. Applies to new sessions.",
+      default: false,
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   function register(values: {
@@ -110,6 +117,7 @@ export default async function plugin(bb: BbPluginApi) {
     bbToolsEnabled: boolean;
     automationsEnabled: boolean;
     offPeakTasksEnabled: boolean;
+    dynamicWorkflowsEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     const launch = {
@@ -123,6 +131,7 @@ export default async function plugin(bb: BbPluginApi) {
       bbToolsEnabled: values.bbToolsEnabled,
       automationsEnabled: values.automationsEnabled,
       offPeakTasksEnabled: values.offPeakTasksEnabled,
+      dynamicWorkflowsEnabled: values.dynamicWorkflowsEnabled,
     };
     registered?.dispose();
     registered = bb.providers.register({

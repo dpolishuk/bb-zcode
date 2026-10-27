@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0 — 2026-10-27
+
+- Open ZCode's native dynamic workflows to plugin sessions (roadmap stage
+  8). A new `dynamicWorkflowsEnabled` setting (off by default) sends an
+  explicit `dynamicWorkflowEnabled` boolean on session create and resume;
+  with it on, the native `CreateWorkflow` tool family registers inside the
+  supervised CLI, the bundled skill gate and the always-ask approval flow
+  through bb's normal approval engine, and completed runs wake the session
+  through the background `<task-notification>` channel the bridge already
+  maps. With it off the gate stays fail-closed and the tools never register.
+- Everything workflow-specific executes inside the CLI process - there is
+  no plugin-side workflow host. The wire contract (gate params, approval
+  shape, the `causalityGraph` display payload, cross-process run reads) is
+  POC-verified on CLI 0.17.0 and pinned in
+  `knowledge/contracts/dynamic-workflow-protocol.md`; rich timeline
+  visualization (stage 9) is deliberately out of this release.
+
 ## 0.11.0 — 2026-10-24
 
 - Host ZCode's native idle-time (off-peak) tasks inside the plugin (roadmap

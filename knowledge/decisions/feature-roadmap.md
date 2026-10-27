@@ -138,7 +138,7 @@ bridge; it remains covered by
 automation host and the v0.11.0 Off-Peak host moved their stages off that
 wait list by hosting inside the bridge worker.
 
-## Stage 8 — dynamic workflows: gate and launch (POC-verified 2026-10-27)
+## Stage 8 — dynamic workflows: gate and launch (shipped in v0.12.0)
 
 Upstream's dynamic workflows are gated, not host-serviced: one explicit
 `dynamicWorkflowEnabled: true` on `session/create`/`resume` (or a
@@ -148,9 +148,10 @@ inside the CLI. A live POC against the installed CLI 0.17.0
 ran a two-phase workflow end to end through a bridge-shaped host: skill gate,
 `CreateWorkflow`, approval via the standard
 `interaction/requestPermission` (already answered by the bridge), run
-completion, and the `<task-notification>` wake turn. Implementation is a
-`dynamicWorkflowsEnabled` plugin setting plus the gate params - the
-off-peak/automations pattern again. Wire details:
+completion, and the `<task-notification>` wake turn. v0.12.0 ships the
+`dynamicWorkflowsEnabled` setting with an explicit boolean on create and
+resume (never omitted, so cold recovery cannot inherit a stale workspace
+policy). Wire details:
 [workflow contract](../contracts/dynamic-workflow-protocol.md) (draft).
 
 ## Stage 9 — dynamic workflow visualization (design ready)
