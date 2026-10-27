@@ -1719,6 +1719,14 @@ export function createBridge(
           ...(disallowedTools.length ? { toolDenylist: disallowedTools } : {}),
           // Idle-time tools register only when the host implements the ports.
           ...(settings.offPeakTasksEnabled ? { offPeakToolEnabled: true } : {}),
+          // The dynamic-workflow gate is fail-closed on the native side: the
+          // CLI's workspace-level policy defaults to off and the bridge never
+          // syncs one, so omitting the param keeps workflows disabled. Send
+          // it only when enabled - older supported CLIs (0.16.9) validate
+          // create/resume params strictly and would reject the unknown field.
+          ...(settings.dynamicWorkflowsEnabled
+            ? { dynamicWorkflowEnabled: true }
+            : {}),
         },
       );
       const snapshot = snapshotSchema.parse(response);

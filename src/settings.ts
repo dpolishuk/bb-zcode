@@ -52,6 +52,7 @@ export function runtimeSettings(raw: unknown) {
   return {
     automationsEnabled: p.automationsEnabled === true,
     offPeakTasksEnabled: p.offPeakTasksEnabled === true,
+    dynamicWorkflowsEnabled: p.dynamicWorkflowsEnabled === true,
     bbToolsEnabled: p.bbToolsEnabled === true,
     preferences: {
       ...RUNTIME_PREFERENCES,

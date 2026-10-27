@@ -101,6 +101,39 @@ The gateway wire API is undocumented upstream and can change; the plugin
 follows the open-source reference implementation and pins it in
 `knowledge/contracts/off-peak-protocol.md`.
 
+## Dynamic workflows
+
+Enable `dynamicWorkflowsEnabled` to let ZCode sessions author and run
+dynamic workflows - the native `CreateWorkflow` multi-agent orchestration
+where the model writes a small phased script and the CLI runs it with a
+roster of subagents:
+
+- The plugin only opens the native gate: one explicit boolean on session
+  create and resume. Everything else (script compilation, subagent runs,
+  journaling, run history) executes inside the supervised CLI process -
+  there is no plugin-side workflow host.
+- The workflow tool family is fail-closed: with the setting off the tools
+  are not registered at all, so models never see them.
+- `CreateWorkflow` always asks for approval; the request flows through the
+  normal bb approval flow like any other high-effect tool, with the script
+  text visible in the approval.
+- Runs report back through the same background channel as other native
+  background work: when a run completes, its `<task-notification>` wakes the
+  session and the model presents the outcome. Run history survives the CLI
+  process - completed runs stay readable through the native read API after
+  the process exits.
+- Workflow subagents use the session's model and consume plan quota while
+  bb is open; the run itself continues only while the CLI process lives
+  (closing the thread stops active runs, matching the native terminal
+  behavior).
+- The model must load the bundled `dynamic-workflows` skill before
+  submitting a script - the native skill gate enforces this and the tool
+  error tells the model how.
+
+Applies to new sessions. The wire contract (gate params, approval shape,
+the `causalityGraph` display payload, run reads) is pinned in
+`knowledge/contracts/dynamic-workflow-protocol.md`.
+
 ## Models
 
 Model IDs use `providerId/modelId`; model and reasoning options come from
