@@ -1327,3 +1327,40 @@ it("retakes are single-flight: a concurrent status poll cannot take a second tic
   const task = await s.find(id);
   expect(task?.serverTicketId).toBe("ticket-2");
 });
+
+it("settles an orphan replacement ticket when the task is cancelled mid-take", async () => {
+  const client = fakeClient();
+  const realTake = client.takeTicket.bind(client);
+  // Gate the retake (second take) so the cancel lands while it is pending.
+  let openGate: (() => void) | undefined;
+  let takes = 0;
+  client.takeTicket = async (taskId: string) => {
+    takes += 1;
+    if (takes === 2)
+      await new Promise<void>((resolve) => {
+        openGate = resolve;
+      });
+    return realTake(taskId);
+  };
+  const s = createOffPeakService({ storeDir: dir, client });
+  const created = record(
+    await s.handle(
+      "offPeak/create",
+      { title: "t", prompt: "p", model: "m" },
+      context,
+    ),
+  ) as unknown as { task: { offPeakTaskId: string } };
+  const id = created.task.offPeakTaskId;
+  s.beginRun(id);
+  const retake = s.completeRun(id, "ticketExpired", "window expired");
+  await new Promise((r) => setTimeout(r, 20));
+  // Cancel while the replacement take is parked on the gate.
+  await s.cancel(id, context.cwd);
+  openGate!();
+  await retake;
+  const task = await s.find(id);
+  expect(task?.status).toBe("cancelled");
+  // The orphan replacement ticket was settled immediately, not installed.
+  expect(client.settled).toContain("ticket-2");
+  expect(task?.serverTicketId).toBe("ticket-1");
+});

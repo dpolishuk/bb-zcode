@@ -700,25 +700,33 @@ export function createOffPeakService(options: {
       return;
     try {
       const ticket = await client.takeTicket(task.offPeakTaskId);
-      await mutate(task.offPeakTaskId, (t) =>
-        t.serverTicketId !== task.serverTicketId
-          ? // Replaced while the take was in flight; leave the taken ticket
-            // unused rather than overwrite the replacement.
-            t
-          : {
-              ...t,
-              serverTicketId: ticket.ticketId,
-              schedulable: t.status === "queued" && ticket.state === "ready",
-              ...(ticket.position !== undefined
-                ? { queuePosition: ticket.position }
-                : {}),
-              nextPollAt:
-                nextPoll ??
-                (ticket.nextPollAfterMs === undefined
-                  ? undefined
-                  : now().getTime() + ticket.nextPollAfterMs),
-            },
-      );
+      // Recheck after the take: a cancel or a concurrent replacement during
+      // the in-flight request leaves this ticket unused. A terminal task
+      // with settled=true would never pick it up in the outbox, so settle
+      // the orphan immediately instead of installing it.
+      const after = await find(task.offPeakTaskId);
+      if (
+        !after ||
+        after.serverTicketId !== task.serverTicketId ||
+        after.status === "paused" ||
+        TERMINAL_STATUSES.has(after.status)
+      ) {
+        await client.settle(ticket.ticketId).catch(() => undefined);
+        return;
+      }
+      await mutate(task.offPeakTaskId, (t) => ({
+        ...t,
+        serverTicketId: ticket.ticketId,
+        schedulable: t.status === "queued" && ticket.state === "ready",
+        ...(ticket.position !== undefined
+          ? { queuePosition: ticket.position }
+          : {}),
+        nextPollAt:
+          nextPoll ??
+          (ticket.nextPollAfterMs === undefined
+            ? undefined
+            : now().getTime() + ticket.nextPollAfterMs),
+      }));
     } catch {
       await mutate(task.offPeakTaskId, (t) => ({
         ...t,
