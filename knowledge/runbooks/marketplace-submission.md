@@ -57,6 +57,12 @@ gotchas that cost time.
   shipped a screenshot of an unrelated Russian thread; the user caught it.
   The re-taken capture was verified with a neutral prompt before the
   replacement commit (PR branch update re-runs `validate`).
+- The neutral gate must also ask about floating third-party overlays
+  (widget/pill/orb/recorder button, e.g. the PLAUD voice-recorder pill).
+  The widget drifts around the screen between captures; a frame where it
+  sits outside the crop region is fine, but only the neutral check of the
+  FINAL CROP proves it is absent (a widget over the sidebar leaked into an
+  earlier submission and the user caught it twice).
 
 ## Why the causality graph never shows in screenshots
 
