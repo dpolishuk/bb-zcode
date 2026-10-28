@@ -50,6 +50,13 @@ gotchas that cost time.
   Marketplace rules: >=1200 px wide, <=2 MiB, PNG/JPEG/WebP, no tokens,
   emails, /Users paths, or unrelated thread text; the timeline column
   (excluding the sidebar) of a maximized window is ~2590 px wide.
+- Gate each capture with a NEUTRAL vision prompt ("transcribe visible text;
+  flag any non-English/private data") that does not name the expected
+  thread. A primed prompt ("the demo thread shows...") made the vision
+  pass confirm content that was not on screen, and the first submission
+  shipped a screenshot of an unrelated Russian thread; the user caught it.
+  The re-taken capture was verified with a neutral prompt before the
+  replacement commit (PR branch update re-runs `validate`).
 
 ## Why the causality graph never shows in screenshots
 
