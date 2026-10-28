@@ -281,3 +281,8 @@
   terminal on the first settle) — recorded as invariants in
   contracts/dynamic-workflow-protocol.md; also keyed the run-history reader
   cache by workspace+limit.
+- 2026-10-28: submitted the plugin to the bb community marketplace
+  (get-bb/marketplace#724, entry `zcode`, source ^0.14.1, CI validate
+  green) after removing the Experimental label (v0.14.0/v0.14.1);
+  procedure + the expanded-row graph rendering constraint recorded in
+  runbooks/marketplace-submission.md.

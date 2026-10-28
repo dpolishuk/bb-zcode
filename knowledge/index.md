@@ -14,6 +14,10 @@ not replace the user-facing [README](../README.md) or [docs/](../docs/).
 - [System overview](architecture/system-overview.md) - Entry points, the per-thread supervised ZCode process, and the responsibility of each `src/` module.
 - [Session invariants](architecture/session-invariants.md) - Behaviors every change must preserve: explicit failure, context-selection lifetime, credential containment, and hard numeric bounds.
 
+## Runbooks
+
+- [Marketplace submission](runbooks/marketplace-submission.md) - The completed community-marketplace entry, the validation gauntlet, the screenshot procedure without computer use, and why the causality graph only shows in expanded rows.
+
 ## Contracts
 
 - [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions, native model identities and context-budget translation rules.
