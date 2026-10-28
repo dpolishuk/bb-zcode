@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/dpolishuk/bb-zcode/actions/workflows/ci.yml"><img src="https://github.com/dpolishuk/bb-zcode/actions/workflows/ci.yml/badge.svg?branch=main" alt="Plugin checks" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-95e6c1?style=flat" alt="MIT license" /></a>
-  <a href="#compatibility"><img src="https://img.shields.io/badge/status-experimental-d6b46c?style=flat" alt="Experimental" /></a>
+  <a href="#compatibility"><img src="https://img.shields.io/badge/status-stable-95e6c1?style=flat" alt="Stable" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178c6?style=flat&logo=typescript&logoColor=white" alt="TypeScript" /></a>
 </p>
 

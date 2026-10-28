@@ -47,7 +47,7 @@ its credential flow has fixture coverage. Each session runs a
 local ZCode process with the host account's permissions; approval modes are
 not an OS sandbox.
 
-This is an independent experimental integration. The marketplace installs
+This is an independent integration. The marketplace installs
 the repository's main branch through bb's native Git installer and updater.
 
 See the [setup guide](https://github.com/dpolishuk/bb-zcode#quick-start) and

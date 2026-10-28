@@ -17,7 +17,7 @@ https://raw.githubusercontent.com/dpolishuk/bb-zcode/main/marketplace.json
 git:https://github.com/dpolishuk/bb-zcode.git@main
 ```
 
-Click **Add**, then find **ZCode [Experimental]** from **ZCode for bb** in the
+Click **Add**, then find **ZCode** from **ZCode for bb** in the
 plugin store and click **Install**. Review bb's resolved source confirmation.
 The plugin runs code locally, just like a direct native plugin installation.
 

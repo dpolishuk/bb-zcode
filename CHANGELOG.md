@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1 — 2026-10-28
+
+- Drop the `[Experimental]` label from the plugin's store name and overview
+  (the store entry is now **ZCode**) and mark the README status badge stable.
+  No behavior change; this is the branding release for the Community
+  marketplace submission.
+
 ## 0.14.0 — 2026-10-27
 
 - Close roadmap stage 9 with live run tracking and the bb-side surfaces

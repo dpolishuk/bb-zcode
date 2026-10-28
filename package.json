@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-zcode",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "private": true,
   "license": "MIT",
   "author": "Dmitry Polishuk (https://github.com/dpolishuk)",
@@ -20,7 +20,7 @@
     "bbPluginSdk": ">=0.6.49 <0.7"
   },
   "bb": {
-    "name": "ZCode [Experimental]",
+    "name": "ZCode",
     "description": "Run local ZCode sessions with streaming replies, tool activity, approvals, and resume.",
     "branding": {
       "icon": "icons/zai-badge.svg"
