@@ -18,8 +18,14 @@ sources:
     resource: https://github.com/dpolishuk/bb-zcode/blob/3dc639de8e7926b2460059dcf20156950fc7f2d3/src/tool-server.ts
   - title: Current accepted model selection and turn settlement
     resource: ../../src/bridge.ts
+  - title: Crash recovery notification and no-session recovery hint
+    resource: ../../src/bridge.ts
   - title: Native follow-up, resume, rejection, and model-switch regressions
     resource: ../../tests/core-features.test.ts
+  - title: Crash-recovery regressions (in-flight and settled turns)
+    resource: ../../tests/core-features.test.ts
+  - title: bb daemon crash-recovery contract, bb 0.46 daemon bundle
+    resource: ../contracts/protocol-contracts.md#crash-recovery-contract
   - title: Real CLI fixture for reporting budgets and background work
     resource: ../../scripts/smoke-live.ts
 generated:
@@ -30,6 +36,8 @@ verified:
     at: 2026-10-20T11:15:00Z
   - by: Codex
     at: 2026-10-22T11:22:00Z
+  - by: zcode-agent/GLM-5.3
+    at: 2026-11-01T16:35:00Z
 ---
 
 # Session invariants
@@ -84,6 +92,14 @@ Re-verified on 2026-10-22 with focused regressions and the real CLI 0.17.0
 loopback fixture (native background completion and cold resume). Other pinned
 bounds retain the verification dates stated below; see
 [validation](../../docs/validation.md) for the evidence boundary.
+
+The crash-recovery invariant was re-verified on 2026-11-01: synthetic
+regressions cover both a crash while the turn is still in flight and a crash
+after it settled, and the bb-side behavior (restart the bridge worker, resume
+the thread and idle siblings, defer while a sibling is mid-turn) was verified
+statically against the bb 0.46 daemon bundle — see
+[Protocol contracts](../contracts/protocol-contracts.md#crash-recovery-contract).
+Live bb-smoke on a disposable instance remains the unexecuted step.
 
 ## Credential containment
 

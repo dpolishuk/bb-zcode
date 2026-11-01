@@ -66,10 +66,11 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
   backoff. Check `bb provider-retry explain <thread-id>` for the decision;
   authentication and configuration errors otherwise remain terminal.
 - When the ZCode process exits unexpectedly, the bridge asks bb to restart it
-  and resume the thread from its native checkpoint; a submit racing that
-  restart fails once with `No ZCode session; start or resume the thread
-first.` and works on the next attempt. `Restarting the "zcode" bridge` in
-  `~/.bb/logs/host-daemon.*.log` confirms the recovery ran.
+  and resume the thread from its native checkpoint. A submit racing that
+  restart fails with `No ZCode session; start or resume the thread first.`; if
+  the error repeats, the restart is still deferred or in progress (bb defers
+  it while sibling threads are mid-turn) — wait for `Restarting the "zcode"
+bridge` in `~/.bb/logs/host-daemon.*.log`, then resubmit.
 - Diagnose a stopped session by its native error. Never silently replace an
   unresumable session, replay a prompt after an uncertain timeout, or copy
   credentials out of ZCode to work around authentication.

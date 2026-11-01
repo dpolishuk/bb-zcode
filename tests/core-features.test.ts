@@ -685,14 +685,13 @@ it("never drains queued work after a child exits during terminal usage refresh",
   expect(h.deltas().filter((d) => d.kind === "turn.boundary")).toEqual([
     { kind: "turn.boundary", status: "failed" },
   ]);
+  await h.until(() => h.messages.some((m) => m.method === "provider/recovery"));
 });
 
-it("asks bb to restart and resume after a restorable session crashes", async () => {
+it("asks bb to restart and resume when a crash interrupts the active turn", async () => {
   const h = harness();
   await h.start();
   await h.send("first");
-  h.event("turn.completed", { resultType: "success" });
-  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
   h.crash();
   await h.until(() => h.messages.some((m) => m.method === "provider/recovery"));
   const endedAt = h.messages.findIndex((m) =>
@@ -730,6 +729,9 @@ it("attaches a restart recovery hint to turns submitted without a session", asyn
   h.event("turn.completed", { resultType: "success" });
   await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
   h.crash();
+  // A settled restorable session must still trigger the restart request
+  // before the racing submit sees the typed no-session error.
+  await h.until(() => h.messages.some((m) => m.method === "provider/recovery"));
   await h.until(() => h.deltas().some((d) => d.kind === "session.ended"));
   const reply = await h.send("after crash", "abcdefghik");
   expect(record(reply.error).code).toBe(-32602);
