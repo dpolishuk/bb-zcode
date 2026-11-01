@@ -328,6 +328,48 @@ it("settles native compaction from its state-update completion when no normal tu
   ]);
 });
 
+it.each([
+  "The API key status is not active. Request id: request-id",
+  "ZCode Coding Plan: account request failed or returned an invalid response. Check ZCode sign-in and network access.",
+])(
+  "classifies transient native account failure for bb automatic retry: %s",
+  async (message) => {
+    const h = harness();
+    await h.start();
+    await h.send("first");
+    h.event("turn.failed", { error: { message } });
+    await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+    const deltas = h.deltas();
+    const errorIndex = deltas.findIndex((d) => d.kind === "provider.error");
+    const boundaryIndex = deltas.findIndex((d) => d.kind === "turn.boundary");
+    expect(errorIndex).toBeGreaterThanOrEqual(0);
+    expect(deltas[errorIndex]).toMatchObject({
+      kind: "provider.error",
+      message: `ZCode: ${message}`,
+      errorInfo: {
+        category: "internal",
+        httpStatusCode: null,
+        providerCode: null,
+      },
+    });
+    expect(errorIndex).toBeLessThan(boundaryIndex);
+  },
+);
+
+it("does not mark native configuration failures as automatically retryable", async () => {
+  const h = harness();
+  await h.start();
+  await h.send("first");
+  h.event("turn.failed", {
+    error: { message: "Reasoning level is required for test/model" },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(h.deltas().some((d) => d.kind === "provider.error")).toBe(false);
+  expect(h.deltas().find((d) => d.kind === "turn.boundary")).toMatchObject({
+    status: "failed",
+  });
+});
+
 it("returns typed stale-turn recovery after the target turn has completed", async () => {
   const h = harness();
   await h.start();
@@ -643,6 +685,61 @@ it("never drains queued work after a child exits during terminal usage refresh",
   expect(h.deltas().filter((d) => d.kind === "turn.boundary")).toEqual([
     { kind: "turn.boundary", status: "failed" },
   ]);
+});
+
+it("asks bb to restart and resume after a restorable session crashes", async () => {
+  const h = harness();
+  await h.start();
+  await h.send("first");
+  h.event("turn.completed", { resultType: "success" });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  h.crash();
+  await h.until(() => h.messages.some((m) => m.method === "provider/recovery"));
+  const endedAt = h.messages.findIndex((m) =>
+    (m.params as { deltas?: { kind: string }[] } | undefined)?.deltas?.some(
+      (d) => d.kind === "session.ended",
+    ),
+  );
+  const recoveryAt = h.messages.findIndex(
+    (m) => m.method === "provider/recovery",
+  );
+  expect(endedAt).toBeGreaterThanOrEqual(0);
+  expect(recoveryAt).toBeGreaterThan(endedAt);
+  expect(
+    h.messages.find((m) => m.method === "provider/recovery")!.params,
+  ).toMatchObject({
+    threadId: "thread",
+    kind: "restartRecommended",
+    retryable: true,
+  });
+});
+
+it("does not request a bridge restart when nothing is restorable", async () => {
+  const h = harness();
+  await h.start();
+  h.crash();
+  await h.until(() => h.deltas().some((d) => d.kind === "session.ended"));
+  await new Promise((r) => setTimeout(r, 15));
+  expect(h.messages.some((m) => m.method === "provider/recovery")).toBe(false);
+});
+
+it("attaches a restart recovery hint to turns submitted without a session", async () => {
+  const h = harness();
+  await h.start();
+  await h.send("first");
+  h.event("turn.completed", { resultType: "success" });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  h.crash();
+  await h.until(() => h.deltas().some((d) => d.kind === "session.ended"));
+  const reply = await h.send("after crash", "abcdefghik");
+  expect(record(reply.error).code).toBe(-32602);
+  expect(record(reply.error).message).toBe(
+    "No ZCode session; start or resume the thread first.",
+  );
+  expect(record(record(reply.error).data).recovery).toMatchObject({
+    kind: "restartRecommended",
+    retryable: true,
+  });
 });
 
 it("does not replay an accepted turn/start client request", async () => {

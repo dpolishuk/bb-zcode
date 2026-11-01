@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Classify the observed transient Z.ai account failures as typed internal
+  provider errors so bb's Provider retry plugin can retry the failed turn up to
+  four times with backoff. Retry remains owned by bb; other authentication and
+  configuration failures stay terminal.
+- Self-heal threads whose ZCode process exits unexpectedly: the bridge now asks
+  bb (`provider/recovery` with `restartRecommended`) to restart it and resume
+  the thread from its native checkpoint, and the residual `No ZCode session`
+  turn error carries the same recovery hint. Previously every later submit on
+  such a thread failed permanently until the thread was manually stopped.
+
 ## 0.14.1 — 2026-10-28
 
 - Drop the `[Experimental]` label from the plugin's store name and overview

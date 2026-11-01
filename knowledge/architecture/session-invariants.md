@@ -57,6 +57,12 @@ matching tests and documentation updates (see
   invented, native Bash file edits are reported as ignored rather than claimed
   restorable, and the fallback "ZCode models unavailable" entry does not claim
   authentication.
+- Losing the ZCode process is reported, not papered over: the running turn
+  fails, the session ends, and — when the native checkpoint can restore it —
+  the bridge asks bb to restart and resume (`provider/recovery`
+  `restartRecommended`). The bridge never rebuilds a dead session in place or
+  answers as if nothing happened; resume still goes through the strict
+  checkpoint path and fails loudly when the session is not restorable.
 
 ## Context selection lifetime
 

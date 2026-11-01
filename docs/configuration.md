@@ -206,6 +206,23 @@ stale-turn recovery when no turn remains active. `/compact` uses the native
 compaction operation. Normal context reporting uses native estimates; billing
 cost is not fabricated.
 
+Recognized transient Z.ai account failures (an inactive API-key status or an
+account-service request/response failure) are reported to bb as retryable
+internal provider errors. With bb's built-in Provider retry plugin enabled, a
+failed turn is retried up to four times with backoff; bb decides whether to
+continue accepted input or resend unaccepted input. Other authentication and
+configuration failures remain terminal. `bb provider-retry explain` shows the
+last scheduling or skip decision.
+
+When the ZCode process exits unexpectedly mid-thread, the bridge fails the
+running turn, ends the session, and asks bb to restart the bridge and resume
+the thread from its native checkpoint (`provider/recovery`,
+`restartRecommended`). bb defers that restart while sibling threads on the same
+process are mid-turn. If a submit still races the restart and fails with
+`No ZCode session; start or resume the thread first.`, the error carries the
+same recovery hint and the next submit lands on the resumed session; threads
+that never started a turn have no checkpoint to restore and start fresh.
+
 ## MCP and native runtime preferences
 
 Set `memoryEnabled` or `nativeSearchEnhancementsEnabled` through bb's plugin
