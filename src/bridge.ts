@@ -604,6 +604,24 @@ export function createBridge(
     session.timeline = undefined;
     session.activeTurnId = undefined;
     session.compacting = false;
+    if (
+      status === "failed" &&
+      (response?.includes("The API key status is not active.") ||
+        response?.includes(
+          "account request failed or returned an invalid response.",
+        ))
+    )
+      emit(session, [
+        {
+          kind: "provider.error",
+          message: response,
+          errorInfo: {
+            category: "internal",
+            httpStatusCode: null,
+            providerCode: null,
+          },
+        },
+      ]);
     timeline?.finish(status, response, checkpoint);
     for (const [id, pending] of interactions)
       if (pending.session === session) {
@@ -1678,6 +1696,18 @@ export function createBridge(
               settle(session, "failed", failure.message);
               sessions.delete(session.threadId);
               emit(session, [{ kind: "session.ended" }]);
+              // session.ended does not clear bb's stored provider-thread
+              // claim, so every later turn/start would fail with "No ZCode
+              // session" until this bridge restarts. Ask bb to restart and
+              // resume the thread while the native checkpoint still restores;
+              // threads that never started a turn have nothing to restore.
+              if (session.restorable)
+                notify("provider/recovery", {
+                  threadId: session.threadId,
+                  kind: "restartRecommended",
+                  message: `The ZCode process exited unexpectedly: ${failure.message}`,
+                  retryable: true,
+                });
             }
             if (client) {
               clients.delete(client);
@@ -2534,10 +2564,21 @@ export function createBridge(
         result(id, {});
         return;
       }
-      throw new ProtocolError(
-        "No ZCode session; start or resume the thread first.",
-        -32602,
-      );
+      // The session was lost without a thread/stop (a crashed ZCode process
+      // or a restarted bridge worker). bb keeps the provider-thread claim, so
+      // attach the protocol recovery hint: bb restarts this bridge, resumes
+      // the thread from its native checkpoint, and the next submit works.
+      const message = "No ZCode session; start or resume the thread first.";
+      error(id, -32602, message, {
+        recovery: {
+          kind: "restartRecommended",
+          message:
+            "The ZCode session is gone. Restart the bridge to resume the " +
+            "thread from its native checkpoint, then submit again.",
+          retryable: true,
+        },
+      });
+      return;
     }
     if (p.providerThreadId !== session.providerThreadId)
       throw new ProtocolError("Provider session id mismatch.", -32602);

@@ -61,6 +61,16 @@ Use this skill for setup and diagnostics of the `zcode` provider in bb.
 - A model catalog or healthy protocol probe is not proof of authenticated model
   connectivity. `npm run test:live` uses a real CLI and synthetic loopback model
   with isolated data. Keep that evidence separate from a real provider run.
+- Recognized transient Z.ai account failures emit typed `provider.error` deltas
+  so bb's Provider retry plugin can retry the turn up to four times with
+  backoff. Check `bb provider-retry explain <thread-id>` for the decision;
+  authentication and configuration errors otherwise remain terminal.
+- When the ZCode process exits unexpectedly, the bridge asks bb to restart it
+  and resume the thread from its native checkpoint. A submit racing that
+  restart fails with `No ZCode session; start or resume the thread first.`; if
+  the error repeats, the restart is still deferred or in progress (bb defers
+  it while sibling threads are mid-turn) — wait for `Restarting the "zcode"
+bridge` in `~/.bb/logs/host-daemon.*.log`, then resubmit.
 - Diagnose a stopped session by its native error. Never silently replace an
   unresumable session, replay a prompt after an uncertain timeout, or copy
   credentials out of ZCode to work around authentication.

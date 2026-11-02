@@ -132,6 +132,27 @@ snapshots.
 
 - These are agent approval policies, not an OS sandbox; the CLI runs with the
   host account's permissions.
+- **Transient failure classification**: the two observed temporary Z.ai account
+  failures (inactive API-key status and account-service request/response
+  failure) produce a `provider.error` delta with `errorInfo.category:
+"internal"` before `turn.boundary(status: "failed")`. This lets bb's Provider
+  retry plugin apply its own bounded durable retry policy and accepted-input
+  continuation semantics. The bridge never replays the prompt itself and leaves
+  other authentication/configuration failures unclassified.
+- **Crash recovery contract**: bb keeps the stored provider-thread claim after
+  the `session.ended` delta and only clears it through `thread/stop` semantics,
+  so a bridge that silently drops a session strands the thread (every later
+  `turn/start` fails with `No ZCode session`). The protocol escape hatch —
+  verified against the bb 0.46 daemon (`daemon-bundle.mjs`) — is the
+  unsolicited `provider/recovery` notification with
+  `kind: "restartRecommended"` plus the failing thread id: the daemon shuts the
+  bridge worker down, resumes the named thread via `thread/resume`, then
+  resumes idle sibling threads, deferring while a sibling is mid-turn. The
+  bridge sends it from the ZCode child-exit handler when the session is
+  restorable, and attaches the same hint as `data.recovery` on the residual
+  `No ZCode session` `-32602` error so a racing submit also triggers the
+  restart. The daemon auto-resumes on its own only when its own session map
+  was reset (daemon restart); an in-worker child exit is invisible to it.
 
 ## Marketplace catalog contract
 

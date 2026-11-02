@@ -1,5 +1,30 @@
 # Knowledge log
 
+## 2026-11-01 (crash self-healing)
+
+- **Fixed** threads stranded by an unexpected ZCode process exit. `session.ended`
+  does not clear bb's stored provider-thread claim, so every later `turn.submit`
+  failed forever with `No ZCode session; start or resume the thread first.`
+  (observed on `thr_8htvmki9xm` and `thr_d6pdiigxzx`; the bb 0.46 daemon keeps
+  its own session map and cannot see an in-worker child exit). The bridge now
+  sends an unsolicited `provider/recovery` `restartRecommended` notification
+  when a restorable session crashes — bb restarts the bridge worker and resumes
+  the thread and idle siblings from native checkpoints — and attaches the same
+  recovery hint to the residual no-session turn error for submits that race the
+  restart. Non-restorable sessions (no turn ever started) still just end.
+  Recorded the daemon-side contract in
+  [protocol contracts](contracts/protocol-contracts.md); three focused
+  regressions cover both paths; 254 tests green.
+
+## 2026-10-29 (transient provider retry)
+
+- **Fixed** ZCode turns ending permanently on the two observed temporary Z.ai
+  account failures. The bridge now emits typed `provider.error` before the
+  failed boundary, allowing bb's Provider retry plugin to schedule its normal
+  four-attempt backoff rather than adding a plugin-side replay loop. Regression
+  coverage includes both transient messages, delta ordering, and a terminal
+  reasoning-configuration error; full `npm run check` passes with 251 tests.
+
 ## 2026-10-27 (v0.13.0, feat/workflow-visualization branch)
 
 - **Added** timeline rendering for dynamic workflows (roadmap stage 9 v1):
