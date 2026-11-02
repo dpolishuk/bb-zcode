@@ -965,3 +965,34 @@ it("rejects native host-service ports with actionable messages", async () => {
     cb.request("bot/channel/reply", { sessionId: id }),
   ).rejects.toThrow(/topic resources.*ZCode Desktop/);
 });
+
+it("declines workspace MCP trust with the contract's unavailable answer", async () => {
+  const h = harness(),
+    id = await h.start();
+  const cb = h.sessions.get(id)!.cb!;
+  // The 0.17.1 child never sends this reverse request, but the contract
+  // defines an explicit unavailable result; answering it keeps a newer CLI
+  // schema-valid instead of tripping over a generic capability error.
+  const trust = {
+    workspace: { workspacePath: "/repo", workspaceKey: "/repo" },
+    serverName: "project-server",
+    declarationDigest: "a".repeat(64),
+    trusted: true,
+  };
+  await expect(cb.request("workspace/mcp/trust", trust)).resolves.toEqual({
+    accepted: false,
+    reasonCode: "workspace_mcp_trust_unavailable",
+  });
+  // The decline is session-independent: the params carry the workspace, so it
+  // still answers after the session has been released.
+  await h.rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: id,
+    intent: "release",
+    activeTurnId: null,
+  });
+  await expect(cb.request("workspace/mcp/trust", trust)).resolves.toEqual({
+    accepted: false,
+    reasonCode: "workspace_mcp_trust_unavailable",
+  });
+});

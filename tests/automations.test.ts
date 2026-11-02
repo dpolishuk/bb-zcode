@@ -248,6 +248,68 @@ it("updates semantics without resurrecting finished one-shots cosmetically", asy
   expect(revived.automation.cronExpr).toBe("*/10 * * * *");
 });
 
+it("pauses an active schedule for CronPauseSelf and keeps it paused", async () => {
+  const fixed = new Date("2026-10-23T10:00:00Z");
+  const s = service(dir, () => fixed);
+  const created = record(
+    await s.handle(
+      "automation/create",
+      { cronExpr: "0 9 * * *", prompt: "watch the build", title: "Watch" },
+      context,
+    ),
+  ) as { automation: { automationId: string } };
+  const id = created.automation.automationId;
+  // The native params carry the workspace object next to the id.
+  const paused = record(
+    await s.handle(
+      "automation/pause",
+      {
+        automationId: id,
+        workspace: { workspacePath: "/workspace", workspaceKey: "/workspace" },
+      },
+      context,
+    ),
+  );
+  expect(paused).toEqual({ paused: true });
+  expect(s.due(new Date("2026-10-24T09:00:00Z"))).toHaveLength(0);
+  // Strict params: the CLI validates this shape, so unknown fields fail here.
+  await expect(
+    s.handle("automation/pause", { automationId: id, extra: 1 }, context),
+  ).rejects.toThrow();
+  const otherWorkspace = { ...context, cwd: "/workspace-b" };
+  // Non-active, unknown and cross-workspace schedules answer "nothing
+  // changed" - the native tool prints its already-paused message for those.
+  expect(
+    await s.handle("automation/pause", { automationId: id }, context),
+  ).toEqual({ paused: false });
+  expect(
+    await s.handle("automation/pause", { automationId: "missing" }, context),
+  ).toEqual({ paused: false });
+  expect(
+    await s.handle("automation/pause", { automationId: id }, otherWorkspace),
+  ).toEqual({ paused: false });
+  // A cosmetic update must not resurrect the paused schedule...
+  await s.handle(
+    "automation/update",
+    { automationId: id, title: "v2" },
+    context,
+  );
+  const afterTitle = record(await s.handle("automation/list", {}, context)) as {
+    automations: Array<Record<string, unknown>>;
+  };
+  expect(afterTitle.automations[0].lifecycleStatus).toBe("paused");
+  // ...while a schedule-semantics change resumes it.
+  const resumed = record(
+    await s.handle(
+      "automation/update",
+      { automationId: id, cronExpr: "0 10 * * *" },
+      context,
+    ),
+  ) as { automation: Record<string, unknown> };
+  expect(resumed.automation.lifecycleStatus).toBe("active");
+  expect(Number(resumed.automation.nextRunAt)).toBeGreaterThan(fixed.getTime());
+});
+
 it("completes recurring runs and stops them after three failures", async () => {
   const fixed = new Date("2026-10-23T10:00:00Z");
   const s = service(dir, () => fixed);
@@ -513,6 +575,92 @@ it("dispatches a due automation into its bound thread and releases the headless 
   await bridge.close();
 });
 
+it("keeps CronPauseSelf available in dispatched runs and records a self-pause", async () => {
+  mkdirSync(dir, { recursive: true });
+  process.env.BB_BRIDGE_DIR = dir;
+  // holdTurns keeps the dispatched turn open so the reverse pause lands
+  // mid-run, exactly where the CLI sends it for the CronPauseSelf tool.
+  const harness = dispatchHarness(dir, true);
+  const { bridge, calls, native, cwd, until, rpc } = harness;
+  writeFileSync(
+    join(dir, "automations.json"),
+    JSON.stringify({
+      version: 1,
+      automations: [
+        {
+          automationId: "automation-1",
+          title: "Watch",
+          cronExpr: "* * * * *",
+          prompt: "Run the report",
+          targetTaskId: "native-1",
+          threadId: "thread",
+          workspacePath: cwd,
+          providerOptions: dispatchOptions.providerOptions,
+          enabled: true,
+          lifecycleStatus: "active",
+          nextRunAt: Date.now() + 1_500,
+          runCount: 0,
+          recurring: true,
+          createdAt: Date.now(),
+        },
+      ],
+    }),
+  );
+  await rpc("thread/start", {
+    threadId: "thread",
+    cwd,
+    options: dispatchOptions,
+    instructionMode: "replace",
+  });
+  await rpc("thread/stop", {
+    threadId: "thread",
+    providerThreadId: "native-1",
+    intent: "release",
+    activeTurnId: null,
+  });
+  await until(() =>
+    calls.some(
+      (c) =>
+        c.method === "session/send" && c.params.automationId === "automation-1",
+    ),
+  );
+  // The cold-resume denies schedule management but keeps the self-pause exit.
+  const resume = calls.find((c) => c.method === "session/resume")!;
+  const denylist = (resume.params.toolDenylist ?? []) as string[];
+  expect(denylist).toContain("CronCreate");
+  expect(denylist).toContain("CronUpdate");
+  expect(denylist).not.toContain("CronPauseSelf");
+  // The CLI answers the CronPauseSelf tool through this reverse RPC.
+  await expect(
+    native.get("native-1")!.cb!.request("automation/pause", {
+      automationId: "automation-1",
+    }),
+  ).resolves.toEqual({ paused: true });
+  native.get("native-1")!.cb!.notification({
+    method: "session/event",
+    params: {
+      sessionId: "native-1",
+      type: "turn.completed",
+      eventSeq: 2,
+      turnId: "turn-1",
+      payload: { resultType: "success", response: "report done" },
+    },
+  });
+  const readStore = () =>
+    JSON.parse(readFileSync(join(dir, "automations.json"), "utf8")) as {
+      automations: Array<Record<string, unknown>>;
+    };
+  // The run still records itself without un-pausing the schedule.
+  await until(
+    () =>
+      readStore().automations[0].runCount === 1 &&
+      readStore().automations[0].lifecycleStatus === "paused",
+  );
+  expect(readStore().automations[0].nextRunAt).toBeUndefined();
+  await until(() => native.get("native-1")!.closed === true);
+  await bridge.close();
+});
+
 it("answers automation reverse RPCs only when the setting is enabled", async () => {
   const storeDir = mkdtempSync(join(tmpdir(), "bb-zcode-automation-gate-"));
   const harness = dispatchHarness(storeDir);
@@ -529,6 +677,12 @@ it("answers automation reverse RPCs only when the setting is enabled", async () 
   const nativeId = String(
     record(calls.find((c) => c.method === "session/create")?.params)
       .sessionId ?? "",
+  );
+  // Without the setting every cron tool - CronPauseSelf included - stays
+  // hidden instead of erroring at call time.
+  const create = calls.find((c) => c.method === "session/create")!;
+  expect((create.params.toolDenylist ?? []) as string[]).toContain(
+    "CronPauseSelf",
   );
   // Without the setting the management command reports the ports as disabled,
   // and the reverse RPC answers with the same actionable error.

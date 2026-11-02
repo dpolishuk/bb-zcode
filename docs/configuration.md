@@ -39,7 +39,8 @@ as an argv array; there is no shell interpolation.
 
 Enable `automationsEnabled` to let ZCode sessions create scheduled tasks
 through the native Cron tools (`CronCreate`, `CronList`, `CronUpdate`,
-`CronDelete`). The plugin answers the native `automation/*` host ports from
+`CronDelete`, plus `CronPauseSelf` on CLI 0.17.1+). The plugin answers the
+native `automation/*` host ports from
 a local store (`automations.json` in the plugin's bridge-data directory) and
 runs schedules itself:
 
@@ -47,7 +48,9 @@ runs schedules itself:
   cold-resumes the saved native session, applies the saved model and mode,
   and sends the prompt with the native automation marker, so ZCode blocks
   recursive task creation for that turn. The reply streams into the same bb
-  thread.
+  thread. Runs cannot manage schedules, but may pause their own schedule
+  with `CronPauseSelf` when the prompt's stop condition is met; a paused
+  schedule only resumes through a schedule change (`CronUpdate`).
 - The scheduler lives in the bridge worker and only runs while bb is open -
   like ZCode Desktop, schedules do not fire while the app is closed. Runs
   missed while closed are skipped; recurring schedules continue from the

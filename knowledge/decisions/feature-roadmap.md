@@ -103,14 +103,19 @@ Conclusion (2026-10-20): bb's provider bridge has **no host-service channel**
 ## Stage 6 — automations (v0.10.0) and Off-Peak (v0.11.0), both shipped plugin-side
 
 Native automations shipped plugin-side (2026-10-23): `src/automations.ts`
-answers the five `automation/*` reverse RPCs from a JSON store in
+answers the `automation/*` reverse RPCs from a JSON store in
 `BB_BRIDGE_DIR` with upstream-matching snapshots, and a bridge-worker
 scheduler dispatches due tasks by cold-resuming the bound session with the
 saved provider options, model and mode plus the native `automationId`
 marker. The `automationsEnabled` setting (off by default) gates both the
 ports and the Cron tools (denylisted when off). Limits: runs fire only
 while bb is open; busy sessions defer ten minutes; three consecutive
-failures park a schedule as `failed`. The upstream reference
+failures park a schedule as `failed`. On 2026-11-02 the sixth method,
+`automation/pause` (CLI 0.17.1), made the `CronPauseSelf` stop-condition
+tool live: a run pausing its own schedule parks it as `paused` (only a
+schedule-semantics update resumes it), the per-run denylist denies
+schedule management but keeps the self-pause exit, and `CronPauseSelf`
+joins the setting-off denylist. The upstream reference
 implementations in `packages/services` (`AutomationService`/`OffPeakTaskService`,
 `zcodeAgentService` handlers) informed the shapes; see the
 [host-boundary amendment](zcode-desktop-host-boundary.md). Off-Peak shipped

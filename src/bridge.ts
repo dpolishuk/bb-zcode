@@ -65,6 +65,7 @@ import {
 import { History, BackgroundWork, managementCommands } from "./lifecycle.js";
 import {
   AUTOMATION_METHODS,
+  CRON_MANAGEMENT_TOOL_NAMES,
   CRON_TOOL_NAMES,
   createAutomationService,
   dispatchPermissionMode,
@@ -961,6 +962,19 @@ export function createBridge(
         providerOptions: session?.providerOptions,
       });
     }
+    // CLI 0.17.1 added a workspace MCP trust control plane: the native side
+    // keeps its own per-workspace trust store and gates servers declared in
+    // workspace config files behind it; the mcpServers this bridge injects at
+    // session/create are exempt. Verified against the installed 0.17.1 bundle
+    // (2026-11-02): the child never sends this reverse request - trust
+    // decisions are recorded client-side - but the contract defines an
+    // explicit "trust store unavailable" answer, which stays schema-valid and
+    // retry-free if a newer CLI starts persisting decisions through the host.
+    if (method === "workspace/mcp/trust")
+      return {
+        accepted: false,
+        reasonCode: "workspace_mcp_trust_unavailable",
+      };
     // These native ports need a host service bb's provider bridge does not
     // expose (verified against SDK 0.6.49: BRIDGE_REQUEST_METHODS has no
     // host-service channel). Reject uniformly with an actionable reason
@@ -1327,6 +1341,8 @@ export function createBridge(
       if (!session) {
         // Cold-resume the bound native session with the settings snapshot
         // captured at creation; scheduled turns never manage schedules.
+        // CronPauseSelf stays available: pausing its own schedule when the
+        // run's stop condition is met is the sanctioned exit (CLI 0.17.1+).
         session = await construct(
           {
             threadId: entry.threadId,
@@ -1334,7 +1350,7 @@ export function createBridge(
             providerThreadId: entry.targetTaskId,
             instructionMode: "replace",
             options: automationOptions(entry),
-            disallowedTools: [...CRON_TOOL_NAMES],
+            disallowedTools: [...CRON_MANAGEMENT_TOOL_NAMES],
           },
           true,
         );

@@ -34,6 +34,8 @@ verified:
     at: 2026-10-20T11:23:47Z
   - by: Codex
     at: 2026-10-22T11:22:00Z
+  - by: zcode-agent/GLM-5.3
+    at: 2026-11-02T09:50:00Z
 ---
 
 # Protocol contracts
@@ -47,7 +49,7 @@ the sources when `stale_after` passes or an upstream release lands.
 | Boundary            | Contract                                          | Verified baseline                                           | Upstream source                                                                                   |
 | ------------------- | ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | bb ↔ plugin         | Provider bridge protocol 2, delta grammar 3 (SDK) | SDK `@get-bb/plugin-sdk` 0.6.49                             | [bb @ 9937c46](https://github.com/get-bb/bb/tree/9937c46f5c7e369de3563eb864c8cbc4c3b9c231)        |
-| plugin ↔ ZCode CLI  | "ZCode Protocol" version 1 over stdio JSON lines  | CLI 0.17.0 (app 3.16.2), macOS; 0.16.9 in the v0.5.0 record | [ZCode @ 0a1fc56](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411) |
+| plugin ↔ ZCode CLI  | "ZCode Protocol" version 1 over stdio JSON lines  | CLI 0.17.1 (app 3.17.1), macOS; 0.16.9 in the v0.5.0 record | [ZCode @ 0a1fc56](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411) |
 | marketplace catalog | bb marketplace schema v2 (generated)              | `marketplace.json` at repo HEAD                             | [docs/marketplace.md](../../docs/marketplace.md)                                                  |
 
 Engine ranges (`package.json`): Node `>=22` (24+ recommended for use), bb
@@ -93,6 +95,28 @@ snapshots.
   protocol method and v4 command surfaces are unchanged versus the 0a1fc56
   pin (110 methods, none added or removed), so the
   [capability audit](../../docs/capability-audit.md) inventory is current.
+- **Re-verification 2026-11-02**: the installed app updated to 3.17.1 with CLI
+  bundle **0.17.1** (upstream sync `a60ba6a`, 2026-10-30; read from
+  `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`). `npm run
+test:live` reported `RUNTIME_VERIFIED`, exit 0; the create/resume,
+  runtime-preferences and v4 command schemas are unchanged. Seven methods
+  were added upstream: `automation/pause` — now served by
+  `src/automations.ts`; it backs the `CronPauseSelf` stop-condition tool a
+  scheduled run calls on itself (params `{automationId, workspace?}` → result
+  `{paused}`; `paused: false` means already paused/completed/failed/unknown),
+  and the dispatch denylist splits into management tools versus the self-pause
+  exit — `CronPauseSelf` joins `CRON_TOOL_NAMES` (hidden when the setting is
+  off) but not the per-run denylist. `session/lifecycle/{changed,
+getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
+  session inside a live child (a different axis than the worker-restart crash
+  recovery) and 0.16.9 lacks them, so adoption waits on a CLI-floor decision.
+  `workspace/mcp/trust` — verified the 0.17.1 child never sends it to a stdio
+  host (no sender in the bundle; trust records live in the CLI's user-domain
+  store and the session-create-injected `mcpServers` are exempt from the
+  workspace trust gate), so the bridge answers the contract's schema-valid
+  `{accepted: false, reasonCode: "workspace_mcp_trust_unavailable"}`. Also:
+  `usage/stats` and `session/usage` are deprecated upstream (hosts moved to
+  `v4/conversation/usage`); the adapter never used them.
 
 ## Translation rules
 

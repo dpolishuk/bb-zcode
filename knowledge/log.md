@@ -311,3 +311,12 @@
   green) after removing the Experimental label (v0.14.0/v0.14.1);
   procedure + the expanded-row graph rendering constraint recorded in
   runbooks/marketplace-submission.md.
+- 2026-11-02: closed the two CLI 0.17.1 gaps from the drift analysis —
+  `automation/pause` host support makes the `CronPauseSelf` stop-condition
+  tool live (dispatch denylist keeps the self-pause exit while still denying
+  schedule management; the tool joins the setting-off denylist), and
+  `workspace/mcp/trust` was verified never-sent by the 0.17.1 child
+  (bridge-injected MCP servers are exempt from the native workspace trust
+  gate) so the bridge answers the contract's unavailable result; the audit
+  gained the 2026-11-02 re-verification section and
+  contracts/protocol-contracts.md the 0.17.1 drift record.

@@ -8,7 +8,8 @@ import { ProtocolError } from "./client.js";
 import { modelRefSchema } from "./protocol.js";
 
 // Native automation contract mirrored from @zcode/shared on upstream main
-// (pinned 2026-10-23). The CLI validates every result with its own strict
+// (pinned 2026-10-23; automation/pause verified against the installed CLI
+// 0.17.1 on 2026-11-02). The CLI validates every result with its own strict
 // schemas, so field names, enums and the exact field set must match.
 export const AUTOMATION_METHODS = new Set([
   "automation/create",
@@ -16,6 +17,7 @@ export const AUTOMATION_METHODS = new Set([
   "automation/list",
   "automation/delete",
   "automation/checkTaskBinding",
+  "automation/pause",
 ]);
 
 export const CRON_TOOL_NAMES = [
@@ -23,7 +25,14 @@ export const CRON_TOOL_NAMES = [
   "CronList",
   "CronUpdate",
   "CronDelete",
+  "CronPauseSelf",
 ] as const;
+
+// Scheduled runs must not manage schedules, but CronPauseSelf is the one
+// sanctioned cron tool inside a run: it can only pause the automation that
+// triggered it, so the dispatch denylist keeps it available (CLI 0.17.1+).
+export const CRON_MANAGEMENT_TOOL_NAMES: readonly string[] =
+  CRON_TOOL_NAMES.filter((name) => name !== "CronPauseSelf");
 
 // Upstream keeps at most 20 definitions per index; the CLI recognizes the
 // limit through this token in the message and stops its retry loops.
@@ -529,6 +538,40 @@ export function createAutomationService(options?: {
     return { automation: snapshot(next) };
   }
 
+  // automation/pause is the host side of the CronPauseSelf tool a scheduled
+  // run calls on its own schedule when its stop condition is met. Result is
+  // the strict {paused} shape; paused=false means "not active, nothing
+  // changed" for unknown, finished or already-paused schedules.
+  async function pause(
+    raw: unknown,
+    cwd: string,
+  ): Promise<{ paused: boolean }> {
+    const input = z
+      .object({
+        automationId: z.string().min(1),
+        // The native params carry the workspace object; scoping stays with
+        // the session cwd like every other automation method.
+        workspace: z.unknown().optional(),
+      })
+      .strict()
+      .parse(raw);
+    await load();
+    const current = loaded!.find(
+      (a) => a.automationId === input.automationId && a.workspacePath === cwd,
+    );
+    if (!current || current.lifecycleStatus !== "active")
+      return { paused: false };
+    // Only the lifecycle flips: due() skips paused entries, the nextRunAt is
+    // left for display, and a schedule-semantics update reactivates it.
+    loaded = loaded!.map((a) =>
+      a.automationId === current.automationId
+        ? { ...a, lifecycleStatus: "paused" as const }
+        : a,
+    );
+    await persist(loaded);
+    return { paused: true };
+  }
+
   async function remove(
     raw: unknown,
     cwd: string,
@@ -693,6 +736,14 @@ export function createAutomationService(options?: {
           -32601,
         );
       return remove(raw, context.cwd);
+    }
+    if (method === "automation/pause") {
+      if (!context.cwd)
+        throw new ProtocolError(
+          "No active bb session for this request.",
+          -32601,
+        );
+      return pause(raw, context.cwd);
     }
     if (method === "automation/checkTaskBinding") {
       if (!context.cwd)
