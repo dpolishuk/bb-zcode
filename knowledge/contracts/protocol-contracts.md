@@ -116,7 +116,10 @@ getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
   workspace trust gate), so the bridge answers the contract's schema-valid
   `{accepted: false, reasonCode: "workspace_mcp_trust_unavailable"}`. Also:
   `usage/stats` and `session/usage` are deprecated upstream (hosts moved to
-  `v4/conversation/usage`); the adapter never used them.
+  `v4/conversation/usage`); `usage/stats` is unused, while `session/usage`
+  is still requested on the optional best-effort resume path (usage
+  restore in `src/bridge.ts`, failure-tolerant) and remains served in
+  0.17.1.
 
 ## Translation rules
 
