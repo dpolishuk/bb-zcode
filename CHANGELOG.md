@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Support the CLI 0.17.1 automation stop-condition flow: the automation host
+  answers the new `automation/pause` reverse RPC, scheduled runs keep the
+  `CronPauseSelf` tool available (pausing their own schedule parks it as
+  `paused` until a schedule change resumes it) while still denying schedule
+  management, and the tool joins the Cron denylist when the automations
+  setting is off. On CLI 0.17.1 the tool was previously dead in both modes.
+- Answer the CLI 0.17.1 `workspace/mcp/trust` reverse request with the
+  contract's schema-valid "trust store unavailable" result. Verified against
+  the installed 0.17.1 bundle that the child never sends it and that the MCP
+  servers the bridge injects are exempt from the native workspace trust gate.
 - Classify the observed transient Z.ai account failures as typed internal
   provider errors so bb's Provider retry plugin can retry the failed turn up to
   four times with backoff. Retry remains owned by bb; other authentication and
