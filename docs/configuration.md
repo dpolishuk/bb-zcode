@@ -153,8 +153,10 @@ The fallback **ZCode models unavailable** entry appears while the catalog is
 unavailable. It does not prove that a provider is authenticated. Likewise,
 health checks verify protocol/catalog availability, not model connectivity.
 Run `/zcode-check` in an idle session to perform one real connectivity
-request; the provider usage panel reports account status and the active
-Coding Plan label without invented usage numbers.
+request; the provider usage panel reports account status, the active Coding
+Plan label, and its live quota windows (5-hour, weekly, MCP) with reset times
+from the plan's quota service, cached for a minute. Windows the service does
+not report numbers for stay hidden rather than guessed.
 
 ## Individual Coding Plan
 

@@ -10,6 +10,7 @@ import {
   threadDeltaNotificationParamsSchema,
   interactionRequestPayloadSchema,
   approvalInteractionOutcomeSchema,
+  providerUsageResultSchema,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { createBridge } from "../src/bridge.js";
 import { record } from "../src/protocol.js";
@@ -309,7 +310,73 @@ it("rejects a mismatched provider identity", async () => {
   expect(record(reply.error).code).toBe(-32602);
 });
 
-it("reports provider usage with the account plan label", async () => {
+it("reports provider usage with the account plan label and quota windows", async () => {
+  const h = harness({
+    accountFactory: () => ({
+      planLabel: "Coding Plan Fixture",
+      async initialize() {},
+      async authorize() {
+        return { headersApplied: false };
+      },
+      async usageWindows() {
+        return [
+          {
+            label: "5-hour window",
+            usedPercent: 42,
+            resetsAt: "2026-11-09T00:00:00.000Z",
+          },
+          { label: "Weekly window", usedPercent: 12, resetsAt: null },
+        ];
+      },
+      close() {},
+    }),
+  });
+  const r = await h.rpc("provider/usage", { providerId: "zcode" });
+  expect(providerUsageResultSchema.safeParse(r.result).success).toBe(true);
+  expect(record(r.result)).toMatchObject({
+    supported: true,
+    usage: {
+      status: "ok",
+      planLabel: "Coding Plan Fixture",
+      accountEmail: null,
+      windows: [
+        {
+          label: "5-hour window",
+          usedPercent: 42,
+          resetsAt: "2026-11-09T00:00:00.000Z",
+        },
+        { label: "Weekly window", usedPercent: 12, resetsAt: null },
+      ],
+    },
+  });
+});
+
+it("caches provider usage within the ttl and re-probes after it", async () => {
+  let quotaFetches = 0;
+  const accountFactory = () => ({
+    planLabel: "Coding Plan Fixture",
+    async initialize() {},
+    async authorize() {
+      return { headersApplied: false };
+    },
+    async usageWindows() {
+      quotaFetches++;
+      return [];
+    },
+    close() {},
+  });
+  const cached = harness({ accountFactory });
+  await cached.rpc("provider/usage", { providerId: "zcode" });
+  await cached.rpc("provider/usage", { providerId: "zcode" });
+  expect(quotaFetches).toBe(1);
+
+  const expired = harness({ accountFactory, usageCacheTtlMs: 0 });
+  await expired.rpc("provider/usage", { providerId: "zcode" });
+  await expired.rpc("provider/usage", { providerId: "zcode" });
+  expect(quotaFetches).toBe(3);
+});
+
+it("keeps provider usage schema-valid without quota windows", async () => {
   const h = harness({
     accountFactory: () => ({
       planLabel: "Coding Plan Fixture",
@@ -321,13 +388,6 @@ it("reports provider usage with the account plan label", async () => {
     }),
   });
   const r = await h.rpc("provider/usage", { providerId: "zcode" });
-  expect(record(r.result)).toMatchObject({
-    supported: true,
-    usage: {
-      status: "ok",
-      planLabel: "Coding Plan Fixture",
-      accountEmail: null,
-      windows: [],
-    },
-  });
+  expect(providerUsageResultSchema.safeParse(r.result).success).toBe(true);
+  expect(record(record(r.result).usage).windows).toEqual([]);
 });

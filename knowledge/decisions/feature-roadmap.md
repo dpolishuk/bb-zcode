@@ -46,11 +46,14 @@ back to the generic tool row so errors stay visible; unknown tools are
 unchanged. Remaining presentation gaps: full unified-diff views (bb renders
 `oldText`/`newText` itself), richer delegation summaries.
 
-## Stage 2 — honest provider maintenance (done in v0.7.0)
+## Stage 2 — honest provider maintenance (done in v0.7.0, windows in Unreleased)
 
 `provider/usage` now answers from sessionless discovery: account status plus
 the active individual Coding Plan subscription label (captured in
-`src/coding-plan.ts`), with empty windows rather than invented numbers.
+`src/coding-plan.ts`), originally with empty windows rather than invented
+numbers; the Unreleased quota change fills real 5-hour/weekly/MCP windows from
+the Z.ai quota-remaining endpoint behind a 60 s cache
+([quota usage protocol](../contracts/quota-usage-protocol.md)).
 `/zcode-check [providerId/modelId]` runs the native
 `provider/testModelConnectivity` on demand - one real model request, no
 session prompt - and health guidance points to it.

@@ -61,6 +61,65 @@ export interface AccountHost {
   close(): void;
   /** Label of the active subscription, when an account host verified one. */
   readonly planLabel?: string | null;
+  /** Quota windows for usage display, when the account can report them. */
+  usageWindows?(): Promise<UsageWindow[] | undefined>;
+}
+
+/** One bb usage window derived from a native quota limit. */
+export interface UsageWindow {
+  label: string;
+  usedPercent: number;
+  resetsAt: string | null;
+}
+
+// Upstream dashboard matching rules (docs/coding-plan-quota-remaining-api.md):
+// TOKENS_LIMIT/unit 3/number 5 is the 5-hour window, TOKENS_LIMIT/unit 6 the
+// weekly window, TIME_LIMIT/unit 5/number 1 the MCP time window. The order
+// fixes the panel display order independently of the response array.
+const quotaWindowRules: readonly {
+  label: string;
+  type: string;
+  unit: number;
+  number: number | null;
+}[] = [
+  { label: "5-hour window", type: "TOKENS_LIMIT", unit: 3, number: 5 },
+  { label: "Weekly window", type: "TOKENS_LIMIT", unit: 6, number: null },
+  { label: "MCP quota", type: "TIME_LIMIT", unit: 5, number: 1 },
+];
+
+const quotaNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/**
+ * Maps native quota-remaining limits onto bb usage windows. The native
+ * `percentage` is already used-percent; limits a rule cannot match with a
+ * finite 0..100 percentage are skipped rather than guessed.
+ */
+export function quotaWindows(limits: unknown, now: number): UsageWindow[] {
+  const rows = (Array.isArray(limits) ? limits : []).map(record);
+  return quotaWindowRules
+    .map((rule) => {
+      const limit = rows.find(
+        (row) =>
+          text(row.type) === rule.type &&
+          row.unit === rule.unit &&
+          (rule.number === null || row.number === rule.number) &&
+          (quotaNumber(row.percentage) ?? -1) >= 0 &&
+          (quotaNumber(row.percentage) ?? 101) <= 100,
+      );
+      const usedPercent = quotaNumber(limit?.percentage);
+      if (!limit || usedPercent === undefined) return undefined;
+      const nextReset = quotaNumber(limit.nextResetTime);
+      return {
+        label: rule.label,
+        usedPercent,
+        resetsAt:
+          nextReset !== undefined && nextReset > now
+            ? new Date(nextReset).toISOString()
+            : null,
+      };
+    })
+    .filter((window): window is UsageWindow => window !== undefined);
 }
 
 /** Implements ZCode's desktop-host contract for individual Coding Plan only. */
@@ -177,6 +236,30 @@ export class CodingPlanHost implements AccountHost {
       codingPlanApiKey: login.token,
       family: login.family,
     };
+  }
+
+  /**
+   * Quota windows for bb's usage panel: one bounded GET against the same
+   * account service, authorized by the short-lived project token (the key
+   * upstream's usage dashboard uses). Degrades to undefined so the panel
+   * keeps the plan label without invented bars.
+   */
+  async usageWindows(): Promise<UsageWindow[] | undefined> {
+    if (!this.login) return undefined;
+    try {
+      const material = await this.getMaterial();
+      const data = record(
+        await this.request(
+          "/api/monitor/usage/quota/limit",
+          material.token,
+          undefined,
+          true,
+        ),
+      );
+      return quotaWindows(data.limits, this.now());
+    } catch {
+      return undefined;
+    }
   }
 
   private async request(

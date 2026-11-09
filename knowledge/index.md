@@ -23,6 +23,7 @@ not replace the user-facing [README](../README.md) or [docs/](../docs/).
 - [Protocol contracts](contracts/protocol-contracts.md) - The bb bridge, ZCode native protocol, and marketplace catalog contracts, with pinned versions, native model identities and context-budget translation rules.
 - [Off-peak protocol](contracts/off-peak-protocol.md) - The undocumented Z.ai idle-time ticket gateway (wire shapes, idle-plan per-run execution, 3102 continuation) and the plugin design derived from it; draft until live-gateway verification.
 - [Dynamic workflow protocol](contracts/dynamic-workflow-protocol.md) - POC-verified wire contract for ZCode dynamic workflows on CLI 0.17.0: gate params, tool family, skill gate, approval shape, the `causalityGraph` display payload, the task-notification wake turn, the cross-process `workflows/runs` read API, and the live-status sources (projection background jobs + v4 run journal events); draft - one happy path exercised.
+- [Quota usage protocol](contracts/quota-usage-protocol.md) - The Z.ai/bigmodel Coding Plan quota-remaining endpoint (5-hour/weekly/MCP windows, used-percent semantics, nextResetTime) and its mapping onto bb's `provider/usage` windows and `provider.rateLimits` deltas; live-verified on the zai family, bigmodel fixture-only.
 
 ## Decisions
 
