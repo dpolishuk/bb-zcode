@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 — 2026-11-09
 
 - Make ZCode visible in the **Provider usage** panel: the panel federates over
   the `provider-usage.v1` RPC contract that only builtin provider plugins
