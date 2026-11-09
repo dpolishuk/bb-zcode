@@ -468,3 +468,83 @@ it("coalesces simultaneous token refreshes", async () => {
   ]);
   expect(f.fetcher).toHaveBeenCalledTimes(8);
 });
+
+it.each(["zai", "bigmodel"] as const)(
+  "maps %s quota windows with the short-lived project token",
+  async (family) => {
+    const f = fixture(family);
+    f.intercept((path) => {
+      if (!path.endsWith("quota/limit")) return undefined;
+      return {
+        code: 0,
+        data: {
+          level: "pro",
+          limits: [
+            {
+              type: "TOKENS_LIMIT",
+              unit: 3,
+              number: 5,
+              percentage: 41.5,
+              nextResetTime: 1_800_000_000_000 + 3_600_000,
+            },
+            {
+              type: "TOKENS_LIMIT",
+              unit: 6,
+              percentage: 12,
+              nextResetTime: 1_800_000_000_000 + 86_400_000,
+            },
+            { type: "TIME_LIMIT", unit: 5, number: 1, percentage: 7 },
+            { type: "TOKENS_LIMIT", unit: 9, percentage: 50 },
+            { type: "TOKENS_LIMIT", unit: 6, percentage: 120 },
+            { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 99 },
+          ],
+        },
+      };
+    });
+    await f.host.initialize(f.client);
+    expect(await f.host.usageWindows()).toEqual([
+      {
+        label: "5-hour window",
+        usedPercent: 41.5,
+        resetsAt: new Date(1_800_000_000_000 + 3_600_000).toISOString(),
+      },
+      {
+        label: "Weekly window",
+        usedPercent: 12,
+        resetsAt: new Date(1_800_000_000_000 + 86_400_000).toISOString(),
+      },
+      { label: "MCP quota", usedPercent: 7, resetsAt: null },
+    ]);
+    const quotaCall = f.fetcher.mock.calls.find(([url]) =>
+      String(url).endsWith("quota/limit"),
+    );
+    expect(record(record(quotaCall?.[1]).headers).Authorization).toBe(
+      "private-project-canary-1",
+    );
+  },
+);
+
+it.each(["http-500", "no-plan", "not-signed-in"])(
+  "degrades quota windows to undefined on %s",
+  async (scenario) => {
+    const f = fixture();
+    if (scenario === "http-500")
+      f.intercept((path) =>
+        path.endsWith("quota/limit")
+          ? new Response("unavailable", { status: 500 })
+          : undefined,
+      );
+    if (scenario === "no-plan")
+      f.intercept((path) =>
+        path.endsWith("quota/limit")
+          ? { code: 302, msg: "不存在coding plan" }
+          : undefined,
+      );
+    if (scenario === "not-signed-in") {
+      f.credentials["oauth:zai:access_token"] = "";
+      f.save();
+    }
+    await f.host.initialize(f.client);
+    expect(await f.host.usageWindows()).toBeUndefined();
+  },
+);

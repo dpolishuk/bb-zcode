@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Show real Coding Plan quota usage in bb's usage panel: `provider/usage` now
+  reports 5-hour, weekly, and MCP windows with used-percent and reset times
+  from the Z.ai/bigmodel quota-remaining endpoint (same account service and
+  short-lived project token the bridge already uses). Results are cached for
+  60 s so panel refreshes do not respawn a probe; quota failures degrade to
+  the previous plan-label-only answer instead of inventing bars.
 - Support the CLI 0.17.1 automation stop-condition flow: the automation host
   answers the new `automation/pause` reverse RPC, scheduled runs keep the
   `CronPauseSelf` tool available (pausing their own schedule parks it as

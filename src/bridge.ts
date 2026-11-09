@@ -49,7 +49,11 @@ import {
   type Snapshot,
 } from "./protocol.js";
 import { Timeline, toolPresentation } from "./timeline.js";
-import { CodingPlanHost, type AccountHost } from "./coding-plan.js";
+import {
+  CodingPlanHost,
+  type AccountHost,
+  type UsageWindow,
+} from "./coding-plan.js";
 import { nativeInput } from "./input.js";
 import { Usage } from "./usage.js";
 import { runtimeSettings } from "./settings.js";
@@ -404,6 +408,8 @@ export function createBridge(
     automationTickMs?: number;
     /** Test seam: replace the off-peak gateway client entirely. */
     offPeakClientFactory?: () => OffPeakServerClient;
+    /** Test seam: provider/usage window cache lifetime (default 60 s). */
+    usageCacheTtlMs?: number;
   } = {},
 ) {
   const write =
@@ -418,6 +424,13 @@ export function createBridge(
   const sessions = new Map<string, Session>();
   const constructing = new Set<string>();
   const startingClients = new Map<string, ZCodeConnection>();
+  // Single-slot cache for provider/usage: one supported plan per installation,
+  // keyed by the exact request payload. Quota lookups ride the heavyweight
+  // sessionless probe, so panel refreshes must not respawn a CLI child or
+  // re-query the account service on every call.
+  const usageCacheTtlMs = config.usageCacheTtlMs ?? 60_000;
+  let usageCache:
+    { key: string; at: number; usage: Record<string, unknown> } | undefined;
   // Most recent native session identity per thread, surviving session
   // release: cold dispatch compares a task's bound session against it to
   // detect threads that were rebound (fork/rewind) after the task was
@@ -2195,7 +2208,11 @@ export function createBridge(
     }
   }
 
-  async function probe(raw: Message, cwd = homedir()) {
+  async function probe(
+    raw: Message,
+    cwd = homedir(),
+    options: { quota?: boolean } = {},
+  ) {
     const launch = resolveLaunch(
       raw.providerOptions,
       config.env ?? process.env,
@@ -2250,7 +2267,10 @@ export function createBridge(
         )
       )
         throw new Error(accountError);
-      return { snapshot, planLabel: account.planLabel ?? null };
+      const windows: UsageWindow[] = options.quota
+        ? ((await account.usageWindows?.()) ?? [])
+        : [];
+      return { snapshot, planLabel: account.planLabel ?? null, windows };
     } finally {
       account.close();
       await client.close();
@@ -2416,20 +2436,34 @@ export function createBridge(
     }
     if (method === "provider/usage") {
       const p = record(parsed.data);
+      const key = JSON.stringify(parsed.data);
+      if (
+        usageCache &&
+        usageCache.key === key &&
+        usageCache.at + usageCacheTtlMs > Date.now()
+      ) {
+        result(id, { supported: true, usage: usageCache.usage });
+        return;
+      }
       try {
-        const { snapshot, planLabel } = await probe(
+        const { snapshot, planLabel, windows } = await probe(
           p,
           text(p.cwd) || homedir(),
+          { quota: true },
         );
         const available = snapshot.settings.model.available.filter(
           (model) => !model.disabledReason,
         );
-        result(id, {
-          supported: true,
-          usage: available.length
-            ? { status: "ok", accountEmail: null, planLabel, windows: [] }
-            : { status: "unauthenticated" },
-        });
+        const usage = available.length
+          ? { status: "ok", accountEmail: null, planLabel, windows }
+          : { status: "unauthenticated" };
+        if (available.length)
+          usageCache = {
+            key,
+            at: Date.now(),
+            usage: usage as Record<string, unknown>,
+          };
+        result(id, { supported: true, usage });
       } catch (failure) {
         result(id, {
           supported: true,

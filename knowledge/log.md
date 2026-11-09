@@ -1,5 +1,25 @@
 # Knowledge log
 
+## 2026-11-09 (quota usage research and implementation)
+
+- **Researched** how to show real ZCode usage in bb. The per-turn `usage` and
+  `contextWindow` deltas already flow; the gaps are `provider/usage` windows
+  (answered with `windows: []` since v0.7.0) and the untouched
+  `provider.rateLimits` delta + `rateLimited` recovery kind. Upstream sync
+  `a60ba6a` documents the Z.ai/bigmodel quota-remaining endpoint
+  (`GET /api/monitor/usage/quota/limit`, raw Coding Plan key auth, same origins
+  `src/coding-plan.ts` already uses) with 5-hour/weekly/MCP windows
+  (used-percent + `nextResetTime`), plus a 5h/weekly reset-opportunity API.
+- **Implemented** the pull side: `CodingPlanHost.usageWindows()` fetches the
+  quota endpoint with the short-lived project token, `quotaWindows()` maps the
+  three windows in a fixed order (finite 0..100 percentage required, future
+  `nextResetTime` only), and `provider/usage` serves them behind a 60 s
+  single-slot cache so panel refreshes do not respawn the sessionless probe;
+  quota failures degrade to the previous plan-label-only answer. Verified live
+  through the real Desktop sign-in (GLM Coding Max: 5-hour 75%, weekly 19%,
+  MCP 1%, real reset timestamps); bigmodel covered by fixtures. Wire contract:
+  [quota usage protocol](contracts/quota-usage-protocol.md).
+
 ## 2026-11-01 (crash self-healing)
 
 - **Fixed** threads stranded by an unexpected ZCode process exit. `session.ended`
