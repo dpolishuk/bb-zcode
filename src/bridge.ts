@@ -54,8 +54,8 @@ import {
   type AccountHost,
   type UsageWindow,
 } from "./coding-plan.js";
+import { Usage, rateLimitFailure } from "./usage.js";
 import { nativeInput } from "./input.js";
-import { Usage } from "./usage.js";
 import { runtimeSettings } from "./settings.js";
 import { skillCatalog } from "./skills.js";
 import type { Subagents } from "./subagents.js";
@@ -611,6 +611,7 @@ export function createBridge(
     status: "completed" | "failed" | "interrupted",
     response?: string,
     checkpoint?: string,
+    quota?: { windows: UsageWindow[] },
   ) {
     cancelTools(session);
     session.injectedNativeCalls.clear();
@@ -619,6 +620,29 @@ export function createBridge(
     session.activeTurnId = undefined;
     session.compacting = false;
     if (
+      status === "failed" &&
+      response !== undefined &&
+      rateLimitFailure(response)
+    ) {
+      // A rate-limited turn is retryable through bb's Provider retry plugin:
+      // the "rate-limit" error category selects it, and a blocked
+      // subscription-window state with reset times schedules the retry at
+      // the window opening instead of a blind backoff.
+      emit(session, [
+        {
+          kind: "provider.error",
+          message: response,
+          errorInfo: {
+            category: "rate-limit",
+            httpStatusCode: null,
+            providerCode: null,
+          },
+        },
+        ...(quota?.windows
+          ? session.usage.rateLimits(quota.windows, response)
+          : []),
+      ]);
+    } else if (
       status === "failed" &&
       (response?.includes("The API key status is not active.") ||
         response?.includes(
@@ -764,8 +788,27 @@ export function createBridge(
           /* Older CLIs remain usable for prompts without history controls. */
         }
       }
+      const response = text(payload.response);
+      let quota: { windows: UsageWindow[] } | undefined;
+      if (
+        status === "failed" &&
+        !session.stopping &&
+        rateLimitFailure(response) &&
+        session.account.usageWindows
+      ) {
+        // One bounded quota read so the retry plugin can schedule at the
+        // window reset; a slow or failing read never delays settlement.
+        const timer = setTimeout(() => undefined, 3000);
+        timer.unref?.();
+        quota = await Promise.race([
+          session.account
+            .usageWindows()
+            .then((windows) => (windows?.length ? { windows } : undefined)),
+          new Promise<undefined>((resolve) => timer).then(() => undefined),
+        ]).catch(() => undefined);
+      }
       if (!session.stopping)
-        settle(session, status, text(payload.response), checkpoint);
+        settle(session, status, response, checkpoint, quota);
     } finally {
       session.draining = false;
     }

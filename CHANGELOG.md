@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Make quota-exhausted turns retry themselves: a failed turn whose error
+  matches a rate-limit signature (the CLI's 429 text, "too many requests",
+  "rate limit") now emits a `provider.error` with category `rate-limit` plus a
+  `provider.rateLimits` subscription-window state (blocked at 100 % window
+  usage, warning at 80 %) read from the live quota service with a 3 s bound.
+  bb's Provider retry plugin uses the reset timestamp to schedule the retry
+  shortly after the window opens instead of leaving the turn failed;
+  non-quota failures and failures without a known reset stay unclassified, and
+  a failed quota read only drops the window state, never the classification.
+
 ## 0.15.0 — 2026-11-09
 
 - Make ZCode visible in the **Provider usage** panel: the panel federates over

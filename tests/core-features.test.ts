@@ -23,6 +23,13 @@ afterEach(async () => {
 function harness(
   earlyStart = true,
   startupCheck?: (callbacks: ClientCallbacks) => Promise<void>,
+  accountExtra?: Partial<{
+    planLabel: string | null;
+    usageWindows: () => Promise<
+      | Array<{ label: string; usedPercent: number; resetsAt: string | null }>
+      | undefined
+    >;
+  }>,
 ) {
   let callbacks: ClientCallbacks,
     seq = 0,
@@ -74,6 +81,7 @@ function harness(
         return { ok: true, headers: { "X-Fixture": "synthetic" } };
       },
       close() {},
+      ...accountExtra,
     }),
     clientFactory: (_launch, _cwd, cb) => {
       callbacks = cb;
@@ -368,6 +376,99 @@ it("does not mark native configuration failures as automatically retryable", asy
   expect(h.deltas().find((d) => d.kind === "turn.boundary")).toMatchObject({
     status: "failed",
   });
+});
+
+it("classifies a rate-limited turn and reports the blocked window for automatic retry", async () => {
+  const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+  const h = harness(true, undefined, {
+    async usageWindows() {
+      return [
+        { label: "5-hour window", usedPercent: 100, resetsAt },
+        { label: "Weekly window", usedPercent: 25, resetsAt: null },
+      ];
+    },
+  });
+  await h.start();
+  await h.send("first");
+  h.event("turn.failed", {
+    error: { message: "Provider rate limited the model request." },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  const deltas = h.deltas();
+  const errorIndex = deltas.findIndex((d) => d.kind === "provider.error");
+  const limitsIndex = deltas.findIndex((d) => d.kind === "provider.rateLimits");
+  const boundaryIndex = deltas.findIndex((d) => d.kind === "turn.boundary");
+  expect(deltas[errorIndex]).toMatchObject({
+    kind: "provider.error",
+    message: "ZCode: Provider rate limited the model request.",
+    errorInfo: {
+      category: "rate-limit",
+      httpStatusCode: null,
+      providerCode: null,
+    },
+  });
+  expect(deltas[limitsIndex]).toMatchObject({
+    kind: "provider.rateLimits",
+    rateLimits: {
+      kind: "subscription-window",
+      providerId: "zcode",
+      status: "blocked",
+      windows: [
+        {
+          label: "5-hour window",
+          providerKey: null,
+          resetsAtMs: Date.parse(resetsAt),
+          status: "blocked",
+        },
+        {
+          label: "Weekly window",
+          providerKey: null,
+          resetsAtMs: null,
+          status: "allowed",
+        },
+      ],
+    },
+  });
+  expect(errorIndex).toBeLessThan(boundaryIndex);
+  expect(limitsIndex).toBeLessThan(boundaryIndex);
+});
+
+it("reports a rate-limited turn without windows when the quota read fails", async () => {
+  const h = harness(true, undefined, {
+    async usageWindows() {
+      return undefined;
+    },
+  });
+  await h.start();
+  await h.send("first");
+  h.event("turn.failed", {
+    error: { message: "Provider rate limited the model request." },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  const deltas = h.deltas();
+  expect(deltas.find((d) => d.kind === "provider.error")).toMatchObject({
+    errorInfo: { category: "rate-limit" },
+  });
+  expect(deltas.some((d) => d.kind === "provider.rateLimits")).toBe(false);
+});
+
+it("does not classify non-quota failures as rate limits even at high quota", async () => {
+  const h = harness(true, undefined, {
+    async usageWindows() {
+      return [{ label: "5-hour window", usedPercent: 100, resetsAt: null }];
+    },
+  });
+  await h.start();
+  await h.send("first");
+  h.event("turn.failed", {
+    error: {
+      message: "Model request exceeded the provider context window.",
+    },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  const deltas = h.deltas();
+  expect(deltas.some((d) => d.kind === "provider.error")).toBe(false);
+  expect(deltas.some((d) => d.kind === "provider.rateLimits")).toBe(false);
 });
 
 it("returns typed stale-turn recovery after the target turn has completed", async () => {
