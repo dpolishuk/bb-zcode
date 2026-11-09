@@ -72,13 +72,30 @@ own credential source.
    live. Limits without a finite 0..100 `percentage` are omitted, not invented
    (the same honesty rule as stage-2 usage); `resetsAt` drops to `null` when
    `nextResetTime` is missing or stale.
-2. `provider.rateLimits` thread delta (push; still unused): a
+2. **"Provider usage" panel federation** (the panel never calls
+   `provider/usage` itself): bb's builtin provider-usage plugin discovers
+   usage sources server-side via `experimental_discoverRpc` of
+   `provider-usage.v1.listResources` and reads each with
+   `provider-usage.v1.getResource`. Only plugins that register that contract
+   with `experimental_discoverable: true` appear; the builtin provider
+   plugins (codex, claude-code, acp) implement it, and `providers.list({
+capability: "usage" })` (fed by the manifest's `maintenance.usage`) is
+   display metadata, not a data source. Resources are
+   `{accountKey: null, id: JSON([hostId, providerId]), providerId, label,
+scope: {kind: "host", hostId, hostName}}`; windows carry the panel grammar
+   (`kind: five-hour|daily|weekly|custom`, stable `id`, `model`, `cost`);
+   measurements flow server → `system.usageLimits({hostId, providerId,
+refresh})` → daemon `provider/usage` → the bridge quota fetch. The panel's
+   plugin caches per resource and invalidates on `thread.idle`/`thread.failed`.
+   Implemented in `src/usageSource.ts` (2026-11-09) after the first quota PR
+   shipped windows that the panel could not see.
+3. `provider.rateLimits` thread delta (push; still unused): a
    `subscription-window`-kind state with per-window `resetsAtMs` and
    `allowed/warning/blocked` status, plus the `rateLimited` provider-recovery
    kind. Upstream CLI classifies HTTP 429 as retryable rate-limited with
    `retryAfterMs` (`failure-classifier.ts`); a quota-exhausted turn failure is
    the natural trigger to push this state.
-3. Per-turn `usage` and `contextWindow` deltas are already implemented in
+4. Per-turn `usage` and `contextWindow` deltas are already implemented in
    `src/usage.ts`; the contextWindow delta additionally accepts a rich
    `snapshot` (categories, `autoCompactAtTokens`) the plugin does not send yet.
 
@@ -97,3 +114,10 @@ own credential source.
   cache keyed by the exact request payload with a 60 s TTL
   (`usageCacheTtlMs` test seam) so panel refreshes neither respawn the CLI
   probe nor re-query the account service.
+- `src/usageSource.ts` registers the panel-facing `provider-usage.v1` source
+  (contract in `src/usageContract.ts`, wired from `server.ts`): host-scoped
+  resources for the zcode provider, window-grammar mapping by label, a 60 s
+  observedAt cache with `refresh` bypass, and error usage states for
+  disconnected hosts and failed collections. `src/usageSource.ts` takes
+  injected deps; `tests/usage-source.test.ts` covers listing, mapping,
+  caching, and degradation.

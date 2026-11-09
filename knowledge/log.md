@@ -2,6 +2,20 @@
 
 ## 2026-11-09 (quota usage research and implementation)
 
+- **Found** why the quota windows were invisible in the Provider usage panel
+  after the first merge: the panel never calls `provider/usage`. It federates
+  over the `provider-usage.v1` RPC contract that only builtin provider
+  plugins (codex, claude-code, acp) implemented server-side; a provider
+  bridge answering `provider/usage` alone is not a panel source, and
+  `maintenance.usage`/`providers.list({capability:"usage"})` is display
+  metadata only. The production worker was verified end-to-end first (spawned
+  exactly as the daemon does; it returned GLM Coding Max with all three
+  windows), isolating the gap to the missing federation registration.
+  Implemented the source in `src/usageSource.ts` (discoverable
+  `provider-usage.v1.listResources`/`getResource`, host-scoped resources,
+  panel window grammar, 60 s cache with refresh bypass, error states);
+  federation semantics recorded in
+  [quota usage protocol](contracts/quota-usage-protocol.md).
 - **Researched** how to show real ZCode usage in bb. The per-turn `usage` and
   `contextWindow` deltas already flow; the gaps are `provider/usage` windows
   (answered with `windows: []` since v0.7.0) and the untouched

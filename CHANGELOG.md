@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Make ZCode visible in the **Provider usage** panel: the panel federates over
+  the `provider-usage.v1` RPC contract that only builtin provider plugins
+  implemented, so the quota windows shipped in the previous change were
+  unreachable from it. The plugin now registers a discoverable usage source
+  (host-scoped resources, panel window grammar, 60 s measurement cache with
+  refresh bypass) whose readings flow through the daemon's `provider/usage`
+  path. Disconnected hosts and failed collections report error usage states
+  instead of blocking the panel.
 - Show real Coding Plan quota usage in bb's usage panel: `provider/usage` now
   reports 5-hour, weekly, and MCP windows with used-percent and reset times
   from the Z.ai/bigmodel quota-remaining endpoint (same account service and
