@@ -15,7 +15,10 @@
   `provider-usage.v1.listResources`/`getResource`, host-scoped resources,
   panel window grammar, 60 s cache with refresh bypass, error states);
   federation semantics recorded in
-  [quota usage protocol](contracts/quota-usage-protocol.md).
+  [quota usage protocol](contracts/quota-usage-protocol.md). Confirmed in an
+  installed bb run the same day: after merge + plugin update the Provider
+  usage panel lists ZCode with live windows, closing the verification ladder
+  for the feature.
 - **Researched** how to show real ZCode usage in bb. The per-turn `usage` and
   `contextWindow` deltas already flow; the gaps are `provider/usage` windows
   (answered with `windows: []` since v0.7.0) and the untouched

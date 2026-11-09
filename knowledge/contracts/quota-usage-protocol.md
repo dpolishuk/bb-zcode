@@ -23,6 +23,8 @@ generated:
 verified:
   - by: zcode-agent/GLM-5.3 (live probe through CodingPlanHost, GLM Coding Max)
     at: 2026-11-09T13:10:00Z
+  - by: user (Provider usage panel shows the ZCode windows in an installed bb run)
+    at: 2026-11-09T18:30:00Z
 ---
 
 # Z.ai Coding Plan quota API and bb usage surfaces
