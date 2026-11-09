@@ -9,6 +9,7 @@ import {
   runRowView,
 } from "./src/runs.js";
 import { workflowRunsRpcContract } from "./src/runsContract.js";
+import { registerPluginUsageSource } from "./src/usageSource.js";
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
@@ -287,4 +288,11 @@ export default async function plugin(bb: BbPluginApi) {
         "ZCode dynamic-workflow run history for this workspace (sessionless cold read).",
     },
   );
+
+  // The "Provider usage" panel federates over the provider-usage.v1 RPC
+  // contract; without a discoverable source it lists nothing even though the
+  // bridge answers provider/usage. Resources are the zcode provider on every
+  // connected host; measurements flow through the daemon's provider/usage
+  // path (the bridge's quota fetch) via system.usageLimits.
+  registerPluginUsageSource(bb);
 }
