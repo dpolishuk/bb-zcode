@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+- Stop unanswered ZCode questions from duplicating in the chat. While an
+  interaction waits for the user, the CLI re-announces the same protocol
+  request about once per second under one business `requestId` (its recovery
+  contract for hosts); the bridge registered each re-announcement as a new bb
+  interaction, so a question left pending stacked dozens of identical rows
+  (observed: 35 copies in one thread). Re-announcements of a pending
+  `requestId` now join the existing interaction - one row, one answer settles
+  every announced protocol request, and the slot is released once it settles
+  so a later question with the same id opens normally. Approvals dedupe
+  through the same path.
+
+- Make quota-exhausted turns retry themselves: a failed turn whose error
+  matches a rate-limit signature (the CLI's 429 text, "too many requests",
+  "rate limit") now emits a `provider.error` with category `rate-limit` plus a
+  `provider.rateLimits` subscription-window state (blocked at 100 % window
+  usage, warning at 80 %) read from the live quota service with a 3 s bound.
+  bb's Provider retry plugin uses the reset timestamp to schedule the retry
+  shortly after the window opens instead of leaving the turn failed;
+  non-quota failures stay unclassified, failures without a known reset keep
+  the classification but get no reset-based retry scheduling (the quota state
+  is what schedules it), and a failed quota read only drops the window state,
+  never the classification. Account-service failures with explicit HTTP
+  statuses stay account errors.
+  The windows are scoped to the Coding Plan provider: a rate-limited
+  personal-API model keeps the retryable classification but never adopts the
+  plan's quota windows, and the separate MCP time allowance never enters the
+  retry state (it stays visible in the usage panel).
+
 ## 0.15.0 — 2026-11-09
 
 - Make ZCode visible in the **Provider usage** panel: the panel federates over

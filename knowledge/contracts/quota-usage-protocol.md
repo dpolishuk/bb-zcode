@@ -91,12 +91,24 @@ refresh})` → daemon `provider/usage` → the bridge quota fetch. The panel's
    plugin caches per resource and invalidates on `thread.idle`/`thread.failed`.
    Implemented in `src/usageSource.ts` (2026-11-09) after the first quota PR
    shipped windows that the panel could not see.
-3. `provider.rateLimits` thread delta (push; still unused): a
+3. `provider.rateLimits` thread delta (push; implemented 2026-11-09): a
    `subscription-window`-kind state with per-window `resetsAtMs` and
-   `allowed/warning/blocked` status, plus the `rateLimited` provider-recovery
-   kind. Upstream CLI classifies HTTP 429 as retryable rate-limited with
-   `retryAfterMs` (`failure-classifier.ts`); a quota-exhausted turn failure is
-   the natural trigger to push this state.
+   `allowed/warning/blocked` status. bb's Provider retry plugin reacts to a
+   failed turn whose `provider.error` carries `errorInfo.category:
+"rate-limit"` (or HTTP 429) and schedules a retry at
+   `max(blockedWindow.resetsAtMs, now) + 15 s + random(0-30 s)` - but only
+   when the state is `blocked`, the kind is `subscription-window`, and a
+   blocked window has a reset time (`decideRetry` in the builtin
+   provider-retry server plugin); without it the failure is declined with
+   `no-rate-limit-state`. The bridge classifies a failed turn whose message
+   matches a rate-limit signature (CLI 429 text, `429`, "too many requests",
+   "rate limit"; context-window/auth/account failures excluded), emits the
+   `provider.error` before the boundary, and one bounded (3 s) quota read
+   feeds the state - windows >=100 % are `blocked`, >=80 % `warning`; a state
+   with no known reset stays silent. The `rateLimited` provider-recovery kind
+   on request errors (daemon in-process backoff) is deliberately NOT used for
+   quota: a fast-fail at submit time would wrongly block switching to a
+   personal API model in the same session.
 4. Per-turn `usage` and `contextWindow` deltas are already implemented in
    `src/usage.ts`; the contextWindow delta additionally accepts a rich
    `snapshot` (categories, `autoCompactAtTokens`) the plugin does not send yet.

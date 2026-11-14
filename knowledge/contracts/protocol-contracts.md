@@ -166,6 +166,15 @@ getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
   retry plugin apply its own bounded durable retry policy and accepted-input
   continuation semantics. The bridge never replays the prompt itself and leaves
   other authentication/configuration failures unclassified.
+- **Interaction re-announce**: while a permission or user-input request waits
+  for the user, the CLI re-sends the same reverse request about once per
+  second under one business `requestId` (`interaction-broker.ts`
+  `INTERACTION_REQUEST_REANNOUNCE_INTERVAL_MS`) so a recovered host can
+  re-register it. Hosts must join re-announcements onto the pending
+  interaction instead of opening a new one; the bridge dedupes in `ask()` by
+  `providerThreadId:requestId` and releases the slot once the promise
+  settles. Verified from a live thread that showed 35 duplicate pending
+  questions before the fix.
 - **Crash recovery contract**: bb keeps the stored provider-thread claim after
   the `session.ended` delta and only clears it through `thread/stop` semantics,
   so a bridge that silently drops a session strands the thread (every later

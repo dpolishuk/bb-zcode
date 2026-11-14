@@ -61,6 +61,11 @@ export interface AccountHost {
   close(): void;
   /** Label of the active subscription, when an account host verified one. */
   readonly planLabel?: string | null;
+  /**
+   * Native provider id of the Coding Plan models, when a plan is active.
+   * Quota windows belong to this provider only; null when no plan is bound.
+   */
+  readonly planProviderId?: string | null;
   /** Quota windows for usage display, when the account can report them. */
   usageWindows?(): Promise<UsageWindow[] | undefined>;
 }
@@ -125,6 +130,8 @@ export function quotaWindows(limits: unknown, now: number): UsageWindow[] {
 /** Implements ZCode's desktop-host contract for individual Coding Plan only. */
 export class CodingPlanHost implements AccountHost {
   planLabel: string | null = null;
+  /** Native provider id serving the entitled Coding Plan models, if bound. */
+  planProviderId: string | null = null;
   private controller = new AbortController();
   private provider?: Provider;
   private login?: Login;
@@ -416,6 +423,7 @@ export class CodingPlanHost implements AccountHost {
       );
     this.planLabel =
       text(active.productName) || text(active.productId) || "Coding Plan";
+    this.planProviderId = this.provider?.providerId ?? null;
     await this.assertCurrent();
     return {
       token,
