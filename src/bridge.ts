@@ -54,8 +54,8 @@ import {
   type AccountHost,
   type UsageWindow,
 } from "./coding-plan.js";
+import { Usage, rateLimitFailure } from "./usage.js";
 import { nativeInput } from "./input.js";
-import { Usage } from "./usage.js";
 import { runtimeSettings } from "./settings.js";
 import { skillCatalog } from "./skills.js";
 import type { Subagents } from "./subagents.js";
@@ -410,6 +410,8 @@ export function createBridge(
     offPeakClientFactory?: () => OffPeakServerClient;
     /** Test seam: provider/usage window cache lifetime (default 60 s). */
     usageCacheTtlMs?: number;
+    /** Test seam: rate-limit quota read deadline (default 3 s). */
+    quotaDeadlineMs?: number;
   } = {},
 ) {
   const write =
@@ -429,6 +431,7 @@ export function createBridge(
   // sessionless probe, so panel refreshes must not respawn a CLI child or
   // re-query the account service on every call.
   const usageCacheTtlMs = config.usageCacheTtlMs ?? 60_000;
+  const quotaDeadlineMs = config.quotaDeadlineMs ?? 3_000;
   let usageCache:
     { key: string; at: number; usage: Record<string, unknown> } | undefined;
   // Most recent native session identity per thread, surviving session
@@ -455,6 +458,9 @@ export function createBridge(
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  // Native re-announced interactions (same business requestId) join their
+  // pending promise here instead of each opening a duplicate bb row.
+  const nativeAsks = new Map<string, Promise<unknown>>();
   let closed = false;
   // Scheduled tasks: one service and scheduler per bridge worker. The store
   // is shared by every thread's session; the scheduler only runs while this
@@ -611,6 +617,7 @@ export function createBridge(
     status: "completed" | "failed" | "interrupted",
     response?: string,
     checkpoint?: string,
+    quota?: { windows: UsageWindow[] },
   ) {
     cancelTools(session);
     session.injectedNativeCalls.clear();
@@ -619,6 +626,29 @@ export function createBridge(
     session.activeTurnId = undefined;
     session.compacting = false;
     if (
+      status === "failed" &&
+      response !== undefined &&
+      rateLimitFailure(response)
+    ) {
+      // A rate-limited turn is retryable through bb's Provider retry plugin:
+      // the "rate-limit" error category selects it, and a blocked
+      // subscription-window state with reset times schedules the retry at
+      // the window opening instead of a blind backoff.
+      emit(session, [
+        {
+          kind: "provider.error",
+          message: response,
+          errorInfo: {
+            category: "rate-limit",
+            httpStatusCode: null,
+            providerCode: null,
+          },
+        },
+        ...(quota?.windows
+          ? session.usage.rateLimits(quota.windows, response)
+          : []),
+      ]);
+    } else if (
       status === "failed" &&
       (response?.includes("The API key status is not active.") ||
         response?.includes(
@@ -764,8 +794,44 @@ export function createBridge(
           /* Older CLIs remain usable for prompts without history controls. */
         }
       }
+      const response = text(payload.response);
+      let quota: { windows: UsageWindow[] } | undefined;
+      if (
+        status === "failed" &&
+        !session.stopping &&
+        rateLimitFailure(response) &&
+        session.account.usageWindows &&
+        // Quota windows belong to the Coding Plan provider only. A rate
+        // limit on a personal API model must not adopt the plan's windows
+        // (an exhausted plan would postpone an unrelated provider's retry);
+        // the error classification itself still applies. Without an explicit
+        // model selection the session runs the native default, which is the
+        // plan when one is signed in.
+        (session.contextModel === undefined ||
+          session.contextModel.providerId === session.account.planProviderId)
+      ) {
+        // One bounded quota read so the retry plugin can schedule at the
+        // window reset; a slow or failing read never delays settlement -
+        // the timer arm must actually settle the race.
+        let deadline!: () => void;
+        const timer = new Promise<undefined>((resolve) => {
+          deadline = () => resolve(undefined);
+        });
+        const timeout = setTimeout(deadline, quotaDeadlineMs);
+        timeout.unref?.();
+        try {
+          quota = await Promise.race([
+            session.account
+              .usageWindows()
+              .then((windows) => (windows?.length ? { windows } : undefined)),
+            timer,
+          ]).catch(() => undefined);
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
       if (!session.stopping)
-        settle(session, status, text(payload.response), checkpoint);
+        settle(session, status, response, checkpoint, quota);
     } finally {
       session.draining = false;
     }
@@ -874,31 +940,60 @@ export function createBridge(
     }
   }
 
-  function ask(session: Session, payload: unknown): Promise<unknown> {
+  function ask(
+    session: Session,
+    payload: unknown,
+    nativeRequestId?: string,
+  ): Promise<unknown> {
     const parsed =
       record(payload).kind === "approval"
         ? approvalInteractionOutcomeSchema.shape.payload.parse(payload)
         : interactionRequestPayloadSchema.parse(payload);
+    // While a request waits for the user, ZCode re-announces the same protocol
+    // request about once per second under one business requestId so hosts can
+    // re-register after recovery. Re-announcements must join the already
+    // pending bb interaction instead of opening a duplicate row per tick
+    // (observed as dozens of identical questions in one thread).
+    const dedupe = nativeRequestId
+      ? `${session.providerThreadId}:${nativeRequestId}`
+      : undefined;
+    const pending = dedupe ? nativeAsks.get(dedupe) : undefined;
+    if (pending) return pending;
     const id = `zcode-interaction-${randomUUID()}`;
-    return new Promise((resolve) => {
+    const promise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         interactions.delete(id);
         resolve({ decision: "deny" });
       }, 10 * 60_000);
       interactions.set(id, { session, resolve, timer });
-      write({
-        jsonrpc: "2.0",
-        id,
-        method: "interaction/request",
-        params: {
-          threadId: session.threadId,
-          providerThreadId: session.providerThreadId,
-          turnId: null,
-          providerNativeIds: true,
-          payload: parsed,
-        },
-      });
+      try {
+        write({
+          jsonrpc: "2.0",
+          id,
+          method: "interaction/request",
+          params: {
+            threadId: session.threadId,
+            providerThreadId: session.providerThreadId,
+            turnId: null,
+            providerNativeIds: true,
+            payload: parsed,
+          },
+        });
+      } catch (failure) {
+        // A failed forward must release the registration and the dedupe
+        // entry, or later re-announcements would replay this rejection
+        // instead of opening a fresh interaction.
+        interactions.delete(id);
+        clearTimeout(timer);
+        reject(failure);
+      }
     });
+    if (dedupe) {
+      nativeAsks.set(dedupe, promise);
+      const release = () => nativeAsks.delete(dedupe);
+      void promise.then(release, release);
+    }
+    return promise;
   }
 
   async function reverseRequest(
@@ -1046,12 +1141,16 @@ export function createBridge(
                 presentation: toolPresentation(tool, text(p.reason)),
               };
       const answer = record(
-        await ask(session, {
-          kind: "approval",
-          subject,
-          reason: text(p.reason) || null,
-          availableDecisions: ["allow_once", "deny"],
-        }),
+        await ask(
+          session,
+          {
+            kind: "approval",
+            subject,
+            reason: text(p.reason) || null,
+            availableDecisions: ["allow_once", "deny"],
+          },
+          text(p.requestId) || undefined,
+        ),
       );
       return { decision: answer.decision === "allow_once" ? "allow" : "deny" };
     }
@@ -1066,28 +1165,32 @@ export function createBridge(
               },
             ];
       const answer = record(
-        await ask(session, {
-          kind: "user_question",
-          questions: questions.map((q, i) => ({
-            id: `q${i}`,
-            prompt: text(q.question),
-            shortLabel: text(q.header, "ZCode"),
-            multiSelect: q.multiSelect === true,
-            allowFreeText: true,
-            options: Array.isArray(q.options)
-              ? q.options.map((option) => {
-                  const o = record(option);
-                  return {
-                    value: text(o.value),
-                    label: text(o.label),
-                    ...(o.description
-                      ? { description: text(o.description) }
-                      : {}),
-                  };
-                })
-              : [],
-          })),
-        }),
+        await ask(
+          session,
+          {
+            kind: "user_question",
+            questions: questions.map((q, i) => ({
+              id: `q${i}`,
+              prompt: text(q.question),
+              shortLabel: text(q.header, "ZCode"),
+              multiSelect: q.multiSelect === true,
+              allowFreeText: true,
+              options: Array.isArray(q.options)
+                ? q.options.map((option) => {
+                    const o = record(option);
+                    return {
+                      value: text(o.value),
+                      label: text(o.label),
+                      ...(o.description
+                        ? { description: text(o.description) }
+                        : {}),
+                    };
+                  })
+                : [],
+            })),
+          },
+          text(p.requestId) || undefined,
+        ),
       );
       if (answer.kind !== "user_answer") return { action: "cancel" };
       const answers = record(answer.answers);
