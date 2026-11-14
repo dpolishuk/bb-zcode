@@ -31,6 +31,7 @@ function harness(
       | undefined
     >;
   }>,
+  bridgeExtra: Parameters<typeof createBridge>[0] = {},
 ) {
   let callbacks: ClientCallbacks,
     seq = 0,
@@ -72,6 +73,7 @@ function harness(
     });
   }
   const bridge = createBridge({
+    ...bridgeExtra,
     write: (m) => messages.push(m),
     accountFactory: () => ({
       async initialize() {},
@@ -503,6 +505,38 @@ it("classifies a personal-provider rate limit without Coding Plan windows", asyn
     errorInfo: { category: "rate-limit" },
   });
   expect(deltas.some((d) => d.kind === "provider.rateLimits")).toBe(false);
+});
+
+it("settles a rate-limited turn when the quota read never resolves", async () => {
+  const h = harness(
+    true,
+    undefined,
+    {
+      planProviderId: "test",
+      usageWindows: () => new Promise(() => {}),
+    },
+    { quotaDeadlineMs: 50 },
+  );
+  await h.start();
+  await h.send("first");
+  h.event("turn.failed", {
+    error: { message: "Provider rate limited the model request." },
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  const deltas = h.deltas();
+  expect(deltas.find((d) => d.kind === "provider.error")).toMatchObject({
+    errorInfo: { category: "rate-limit" },
+  });
+  expect(deltas.some((d) => d.kind === "provider.rateLimits")).toBe(false);
+  // The deadline released draining: a follow-up turn dispatches.
+  await h.send("second", "abcdefghiq");
+  await h.until(
+    () => h.calls.filter((c) => c.method === "session/send").length >= 2,
+  );
+  h.event("turn.completed", { resultType: "success" });
+  await h.until(
+    () => h.deltas().filter((d) => d.kind === "turn.boundary").length >= 2,
+  );
 });
 
 it("returns typed stale-turn recovery after the target turn has completed", async () => {

@@ -410,6 +410,8 @@ export function createBridge(
     offPeakClientFactory?: () => OffPeakServerClient;
     /** Test seam: provider/usage window cache lifetime (default 60 s). */
     usageCacheTtlMs?: number;
+    /** Test seam: rate-limit quota read deadline (default 3 s). */
+    quotaDeadlineMs?: number;
   } = {},
 ) {
   const write =
@@ -429,6 +431,7 @@ export function createBridge(
   // sessionless probe, so panel refreshes must not respawn a CLI child or
   // re-query the account service on every call.
   const usageCacheTtlMs = config.usageCacheTtlMs ?? 60_000;
+  const quotaDeadlineMs = config.quotaDeadlineMs ?? 3_000;
   let usageCache:
     { key: string; at: number; usage: Record<string, unknown> } | undefined;
   // Most recent native session identity per thread, surviving session
@@ -811,7 +814,7 @@ export function createBridge(
         const timer = new Promise<undefined>((resolve) => {
           deadline = () => resolve(undefined);
         });
-        const timeout = setTimeout(deadline, 3000);
+        const timeout = setTimeout(deadline, quotaDeadlineMs);
         timeout.unref?.();
         try {
           quota = await Promise.race([
