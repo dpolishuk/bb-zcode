@@ -102,14 +102,44 @@ describe("Usage.rateLimits", () => {
     ).toEqual([]);
   });
 
+  it("excludes the MCP allowance from model retry windows", () => {
+    const reset = new Date(Date.now() + 3_600_000).toISOString();
+    const mcpReset = new Date(Date.now() + 86_400_000).toISOString();
+    // Only the MCP quota is exhausted: no retry state at all.
+    expect(
+      usage.rateLimits(
+        windows([{ label: "MCP quota", usedPercent: 100, resetsAt: mcpReset }]),
+        "rate limited",
+      ),
+    ).toEqual([]);
+    // Both exhausted: the state schedules against the model window's reset,
+    // not the later MCP one.
+    const deltas = usage.rateLimits(
+      windows([
+        { usedPercent: 100, resetsAt: reset },
+        { label: "MCP quota", usedPercent: 100, resetsAt: mcpReset },
+      ]),
+      "rate limited",
+    );
+    const state = (deltas[0] as { rateLimits: Record<string, unknown> })
+      .rateLimits;
+    expect(state.windows).toEqual([
+      {
+        label: "5-hour window",
+        providerKey: null,
+        resetsAtMs: Date.parse(reset),
+        status: "blocked",
+      },
+    ]);
+  });
+
   it("keeps a blocked aggregate when the blocked window's timestamp is malformed", () => {
     const deltas = usage.rateLimits(
       windows([
         { usedPercent: 100, resetsAt: "not-a-timestamp" },
-        { label: "Weekly window", usedPercent: 25, resetsAt: null },
         {
-          label: "MCP quota",
-          usedPercent: 10,
+          label: "Weekly window",
+          usedPercent: 25,
           resetsAt: new Date(Date.now() + 60_000).toISOString(),
         },
       ]),
@@ -123,13 +153,7 @@ describe("Usage.rateLimits", () => {
       {
         label: "Weekly window",
         providerKey: null,
-        resetsAtMs: null,
-        status: "allowed",
-      },
-      {
-        label: "MCP quota",
-        providerKey: null,
-        resetsAtMs: (state.windows as Array<{ resetsAtMs: number }>)[1]
+        resetsAtMs: (state.windows as Array<{ resetsAtMs: number }>)[0]
           .resetsAtMs,
         status: "allowed",
       },

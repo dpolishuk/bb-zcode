@@ -94,7 +94,11 @@ function rateLimitState(
   windows: UsageWindow[],
   reason: string,
 ): Extract<ThreadDelta, { kind: "provider.rateLimits" }>["rateLimits"] | null {
-  const mapped = windows.map((w) => ({
+  // The MCP allowance is a separate TIME_LIMIT that does not govern model
+  // requests: an exhausted MCP quota must not postpone a model retry. It
+  // stays in the provider/usage display but never enters the retry state.
+  const modelWindows = windows.filter((w) => w.label !== "MCP quota");
+  const mapped = modelWindows.map((w) => ({
     label: w.label,
     providerKey: null,
     resetsAtMs: w.resetsAt === null ? null : Date.parse(w.resetsAt),

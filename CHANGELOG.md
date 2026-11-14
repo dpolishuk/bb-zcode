@@ -13,7 +13,8 @@
   a failed quota read only drops the window state, never the classification.
   The windows are scoped to the Coding Plan provider: a rate-limited
   personal-API model keeps the retryable classification but never adopts the
-  plan's quota windows.
+  plan's quota windows, and the separate MCP time allowance never enters the
+  retry state (it stays visible in the usage panel).
 
 ## 0.15.0 — 2026-11-09
 
