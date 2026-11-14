@@ -13,7 +13,9 @@ describe("rateLimitFailure", () => {
   it.each([
     "ZCode: Provider rate limited the model request.",
     "ZCode: HTTP 429 too many requests",
+    "ZCode: HTTP/1.1 429",
     "ZCode: 请求被限流 (429)",
+    "ZCode: status code 429 from the provider",
   ])("matches %s", (message) => {
     expect(rateLimitFailure(message)).toBe(true);
   });
@@ -24,6 +26,9 @@ describe("rateLimitFailure", () => {
     "ZCode: The API key status is not active.",
     "ZCode: account request failed or returned an invalid response.",
     "ZCode: Provider returned a server error.",
+    // A bare 429 quoted for another reason must not tag the turn retryable.
+    "ZCode: 429 files were scanned before the failure.",
+    "ZCode: exit code 429 rows remained unread",
   ])("does not match %s", (message) => {
     expect(rateLimitFailure(message)).toBe(false);
   });
@@ -95,5 +100,39 @@ describe("Usage.rateLimits", () => {
         "rate limited",
       ),
     ).toEqual([]);
+  });
+
+  it("keeps a blocked aggregate when the blocked window's timestamp is malformed", () => {
+    const deltas = usage.rateLimits(
+      windows([
+        { usedPercent: 100, resetsAt: "not-a-timestamp" },
+        { label: "Weekly window", usedPercent: 25, resetsAt: null },
+        {
+          label: "MCP quota",
+          usedPercent: 10,
+          resetsAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      ]),
+      "rate limited",
+    );
+    expect(deltas).toHaveLength(1);
+    const state = (deltas[0] as { rateLimits: Record<string, unknown> })
+      .rateLimits;
+    expect(state.status).toBe("blocked");
+    expect(state.windows).toEqual([
+      {
+        label: "Weekly window",
+        providerKey: null,
+        resetsAtMs: null,
+        status: "allowed",
+      },
+      {
+        label: "MCP quota",
+        providerKey: null,
+        resetsAtMs: (state.windows as Array<{ resetsAtMs: number }>)[1]
+          .resetsAtMs,
+        status: "allowed",
+      },
+    ]);
   });
 });

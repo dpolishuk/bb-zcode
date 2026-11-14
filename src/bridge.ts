@@ -797,15 +797,24 @@ export function createBridge(
         session.account.usageWindows
       ) {
         // One bounded quota read so the retry plugin can schedule at the
-        // window reset; a slow or failing read never delays settlement.
-        const timer = setTimeout(() => undefined, 3000);
-        timer.unref?.();
-        quota = await Promise.race([
-          session.account
-            .usageWindows()
-            .then((windows) => (windows?.length ? { windows } : undefined)),
-          new Promise<undefined>((resolve) => timer).then(() => undefined),
-        ]).catch(() => undefined);
+        // window reset; a slow or failing read never delays settlement -
+        // the timer arm must actually settle the race.
+        let deadline!: () => void;
+        const timer = new Promise<undefined>((resolve) => {
+          deadline = () => resolve(undefined);
+        });
+        const timeout = setTimeout(deadline, 3000);
+        timeout.unref?.();
+        try {
+          quota = await Promise.race([
+            session.account
+              .usageWindows()
+              .then((windows) => (windows?.length ? { windows } : undefined)),
+            timer,
+          ]).catch(() => undefined);
+        } finally {
+          clearTimeout(timeout);
+        }
       }
       if (!session.stopping)
         settle(session, status, response, checkpoint, quota);

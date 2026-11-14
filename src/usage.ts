@@ -83,7 +83,9 @@ export function rateLimitFailure(message: string): boolean {
     )
   )
     return false;
-  return /\brate[ -]?limit|too many requests|http 429\b|\(429\)|\b429\b/i.test(
+  // A bare "429" anywhere would over-match failure text that quotes the
+  // number for another reason; only explicit HTTP-status forms count.
+  return /\brate[ -]?limit|too many requests|http(?:\/[\d.]+)?\s+429\b|\(429\)|status(?:\s*code)?[:=]?\s*429\b/i.test(
     message,
   );
 }
@@ -92,28 +94,32 @@ function rateLimitState(
   windows: UsageWindow[],
   reason: string,
 ): Extract<ThreadDelta, { kind: "provider.rateLimits" }>["rateLimits"] | null {
-  const rows = windows
-    .map((w) => ({
-      label: w.label,
-      providerKey: null,
-      resetsAtMs: w.resetsAt === null ? null : Date.parse(w.resetsAt),
-      status:
-        w.usedPercent >= 100
-          ? ("blocked" as const)
-          : w.usedPercent >= 80
-            ? ("warning" as const)
-            : ("allowed" as const),
-    }))
-    // A malformed timestamp drops only its own window; the state as a whole
-    // needs at least one known reset for the retry plugin to schedule.
-    .filter((w) => w.resetsAtMs === null || Number.isFinite(w.resetsAtMs));
-  if (!rows.some((w) => w.resetsAtMs !== null)) return null;
-  const status = rows.some((w) => w.status === "blocked")
+  const mapped = windows.map((w) => ({
+    label: w.label,
+    providerKey: null,
+    resetsAtMs: w.resetsAt === null ? null : Date.parse(w.resetsAt),
+    status:
+      w.usedPercent >= 100
+        ? ("blocked" as const)
+        : w.usedPercent >= 80
+          ? ("warning" as const)
+          : ("allowed" as const),
+  }));
+  // The aggregate status must reflect every window: a blocked window with a
+  // malformed timestamp still blocks, so it is dropped from the emitted rows
+  // but not from the status computation.
+  const status = mapped.some((w) => w.status === "blocked")
     ? "blocked"
-    : rows.some((w) => w.status === "warning")
+    : mapped.some((w) => w.status === "warning")
       ? "warning"
       : "allowed";
-  if (status === "allowed") return null;
+  const rows = mapped.filter(
+    (w) => w.resetsAtMs === null || Number.isFinite(w.resetsAtMs),
+  );
+  // The state as a whole needs at least one known reset for the retry
+  // plugin to schedule.
+  if (status === "allowed" || !rows.some((w) => w.resetsAtMs !== null))
+    return null;
   return {
     kind: "subscription-window",
     overageReason: null,
