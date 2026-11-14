@@ -794,7 +794,15 @@ export function createBridge(
         status === "failed" &&
         !session.stopping &&
         rateLimitFailure(response) &&
-        session.account.usageWindows
+        session.account.usageWindows &&
+        // Quota windows belong to the Coding Plan provider only. A rate
+        // limit on a personal API model must not adopt the plan's windows
+        // (an exhausted plan would postpone an unrelated provider's retry);
+        // the error classification itself still applies. Without an explicit
+        // model selection the session runs the native default, which is the
+        // plan when one is signed in.
+        (session.contextModel === undefined ||
+          session.contextModel.providerId === session.account.planProviderId)
       ) {
         // One bounded quota read so the retry plugin can schedule at the
         // window reset; a slow or failing read never delays settlement -

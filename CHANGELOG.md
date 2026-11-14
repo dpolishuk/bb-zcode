@@ -11,6 +11,9 @@
   shortly after the window opens instead of leaving the turn failed;
   non-quota failures and failures without a known reset stay unclassified, and
   a failed quota read only drops the window state, never the classification.
+  The windows are scoped to the Coding Plan provider: a rate-limited
+  personal-API model keeps the retryable classification but never adopts the
+  plan's quota windows.
 
 ## 0.15.0 — 2026-11-09
 
