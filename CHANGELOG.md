@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 — 2026-11-15
 
 - Stop unanswered ZCode questions from duplicating in the chat. While an
   interaction waits for the user, the CLI re-announces the same protocol
