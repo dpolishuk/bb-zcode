@@ -244,6 +244,56 @@ it("maps a native question and answer", async () => {
   ).toBe(true);
 });
 
+it("joins re-announced native questions into one pending interaction", async () => {
+  const h = harness();
+  const providerThreadId = await h.start();
+  await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghij",
+    input: [{ type: "text", text: "reannounce", mentions: [] }],
+  });
+  // Five simultaneous re-announcements of one business requestId must open
+  // exactly one bb interaction, not five duplicate question rows.
+  await h.until(() =>
+    Boolean(h.messages.find((m) => m.method === "interaction/request")),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const requests = h.messages.filter((m) => m.method === "interaction/request");
+  expect(requests).toHaveLength(1);
+  h.bridge.handleLine(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: requests[0].id,
+      result: { kind: "user_answer", answers: { q0: { selected: ["a"] } } },
+    }),
+  );
+  // Every re-announced protocol request settles with the same answer.
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(
+    h
+      .deltas()
+      .some(
+        (d) =>
+          typeof d.text === "string" && d.text.includes('"Which one?":"a"'),
+      ),
+  ).toBe(true);
+  // A later question with the same requestId opens a fresh interaction
+  // (the dedupe entry is released once the promise settles).
+  await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghik",
+    input: [{ type: "text", text: "question", mentions: [] }],
+  });
+  await h.until(
+    () =>
+      h.messages.filter((m) => m.method === "interaction/request").length === 2,
+  );
+});
+
 it("settles interruption before replying, releases the child, and cold-resumes the same session", async () => {
   const h = harness();
   const providerThreadId = await h.start();

@@ -1,5 +1,20 @@
 # Knowledge log
 
+## 2026-11-14 (interaction re-announce dedupe)
+
+- **Fixed** unanswered questions stacking duplicate rows in bb threads. The
+  native interaction broker re-announces a pending reverse request about once
+  per second under one business `requestId`
+  (`INTERACTION_REQUEST_REANNOUNCE_INTERVAL_MS` in `interaction-broker.ts`;
+  the recovery contract expects hosts to re-register from re-announcements).
+  The bridge treated every re-announcement as a fresh interaction - observed
+  35 identical pending questions in `thr_74f4yy9yhf` over nine minutes.
+  `ask()` now keys unanswered interactions by
+  `providerThreadId:native requestId`; re-announcements join the pending
+  promise, one bb interaction is shown, and every announced protocol request
+  settles with the same answer. Approvals ride the same dedupe. Recorded in
+  [protocol contracts](contracts/protocol-contracts.md).
+
 ## 2026-11-09 (rate-limit retry state)
 
 - **Implemented** the push half of the quota feature: rate-limited failed

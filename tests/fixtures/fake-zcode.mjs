@@ -99,8 +99,9 @@ async function run(p) {
     return;
   }
   if (p.content === "question") {
-    const answer = await host("interaction/requestUserInput", {
+    const request = {
       sessionId,
+      requestId: "reannounced-question",
       questions: [
         {
           question: "Which one?",
@@ -108,9 +109,35 @@ async function run(p) {
           options: [{ value: "a", label: "A" }],
         },
       ],
-    });
+    };
+    const answer = await host("interaction/requestUserInput", request);
     event(sessionId, "turn.completed", {
       response: JSON.stringify(answer),
+      resultType: "success",
+    });
+    return;
+  }
+  if (p.content === "reannounce") {
+    // The native broker re-announces an unanswered interaction about once
+    // per second under one business requestId until it is answered.
+    const request = {
+      sessionId,
+      requestId: "reannounced-question",
+      questions: [
+        {
+          question: "Which one?",
+          header: "Choice",
+          options: [{ value: "a", label: "A" }],
+        },
+      ],
+    };
+    const answers = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        host("interaction/requestUserInput", request),
+      ),
+    );
+    event(sessionId, "turn.completed", {
+      response: JSON.stringify(answers[0]),
       resultType: "success",
     });
     return;

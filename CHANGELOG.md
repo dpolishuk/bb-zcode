@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Stop unanswered ZCode questions from duplicating in the chat. While an
+  interaction waits for the user, the CLI re-announces the same protocol
+  request about once per second under one business `requestId` (its recovery
+  contract for hosts); the bridge registered each re-announcement as a new bb
+  interaction, so a question left pending stacked dozens of identical rows
+  (observed: 35 copies in one thread). Re-announcements of a pending
+  `requestId` now join the existing interaction - one row, one answer settles
+  every announced protocol request, and the slot is released once it settles
+  so a later question with the same id opens normally. Approvals dedupe
+  through the same path.
+
 - Make quota-exhausted turns retry themselves: a failed turn whose error
   matches a rate-limit signature (the CLI's 429 text, "too many requests",
   "rate limit") now emits a `provider.error` with category `rate-limit` plus a

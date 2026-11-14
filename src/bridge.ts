@@ -458,6 +458,9 @@ export function createBridge(
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  // Native re-announced interactions (same business requestId) join their
+  // pending promise here instead of each opening a duplicate bb row.
+  const nativeAsks = new Map<string, Promise<unknown>>();
   let closed = false;
   // Scheduled tasks: one service and scheduler per bridge worker. The store
   // is shared by every thread's session; the scheduler only runs while this
@@ -937,13 +940,27 @@ export function createBridge(
     }
   }
 
-  function ask(session: Session, payload: unknown): Promise<unknown> {
+  function ask(
+    session: Session,
+    payload: unknown,
+    nativeRequestId?: string,
+  ): Promise<unknown> {
     const parsed =
       record(payload).kind === "approval"
         ? approvalInteractionOutcomeSchema.shape.payload.parse(payload)
         : interactionRequestPayloadSchema.parse(payload);
+    // While a request waits for the user, ZCode re-announces the same protocol
+    // request about once per second under one business requestId so hosts can
+    // re-register after recovery. Re-announcements must join the already
+    // pending bb interaction instead of opening a duplicate row per tick
+    // (observed as dozens of identical questions in one thread).
+    const dedupe = nativeRequestId
+      ? `${session.providerThreadId}:${nativeRequestId}`
+      : undefined;
+    const pending = dedupe ? nativeAsks.get(dedupe) : undefined;
+    if (pending) return pending;
     const id = `zcode-interaction-${randomUUID()}`;
-    return new Promise((resolve) => {
+    const promise = new Promise((resolve) => {
       const timer = setTimeout(() => {
         interactions.delete(id);
         resolve({ decision: "deny" });
@@ -962,6 +979,11 @@ export function createBridge(
         },
       });
     });
+    if (dedupe) {
+      nativeAsks.set(dedupe, promise);
+      void promise.then(() => nativeAsks.delete(dedupe));
+    }
+    return promise;
   }
 
   async function reverseRequest(
@@ -1109,12 +1131,16 @@ export function createBridge(
                 presentation: toolPresentation(tool, text(p.reason)),
               };
       const answer = record(
-        await ask(session, {
-          kind: "approval",
-          subject,
-          reason: text(p.reason) || null,
-          availableDecisions: ["allow_once", "deny"],
-        }),
+        await ask(
+          session,
+          {
+            kind: "approval",
+            subject,
+            reason: text(p.reason) || null,
+            availableDecisions: ["allow_once", "deny"],
+          },
+          text(p.requestId) || undefined,
+        ),
       );
       return { decision: answer.decision === "allow_once" ? "allow" : "deny" };
     }
@@ -1129,28 +1155,32 @@ export function createBridge(
               },
             ];
       const answer = record(
-        await ask(session, {
-          kind: "user_question",
-          questions: questions.map((q, i) => ({
-            id: `q${i}`,
-            prompt: text(q.question),
-            shortLabel: text(q.header, "ZCode"),
-            multiSelect: q.multiSelect === true,
-            allowFreeText: true,
-            options: Array.isArray(q.options)
-              ? q.options.map((option) => {
-                  const o = record(option);
-                  return {
-                    value: text(o.value),
-                    label: text(o.label),
-                    ...(o.description
-                      ? { description: text(o.description) }
-                      : {}),
-                  };
-                })
-              : [],
-          })),
-        }),
+        await ask(
+          session,
+          {
+            kind: "user_question",
+            questions: questions.map((q, i) => ({
+              id: `q${i}`,
+              prompt: text(q.question),
+              shortLabel: text(q.header, "ZCode"),
+              multiSelect: q.multiSelect === true,
+              allowFreeText: true,
+              options: Array.isArray(q.options)
+                ? q.options.map((option) => {
+                    const o = record(option);
+                    return {
+                      value: text(o.value),
+                      label: text(o.label),
+                      ...(o.description
+                        ? { description: text(o.description) }
+                        : {}),
+                    };
+                  })
+                : [],
+            })),
+          },
+          text(p.requestId) || undefined,
+        ),
       );
       if (answer.kind !== "user_answer") return { action: "cancel" };
       const answers = record(answer.answers);
