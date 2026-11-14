@@ -960,28 +960,38 @@ export function createBridge(
     const pending = dedupe ? nativeAsks.get(dedupe) : undefined;
     if (pending) return pending;
     const id = `zcode-interaction-${randomUUID()}`;
-    const promise = new Promise((resolve) => {
+    const promise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         interactions.delete(id);
         resolve({ decision: "deny" });
       }, 10 * 60_000);
       interactions.set(id, { session, resolve, timer });
-      write({
-        jsonrpc: "2.0",
-        id,
-        method: "interaction/request",
-        params: {
-          threadId: session.threadId,
-          providerThreadId: session.providerThreadId,
-          turnId: null,
-          providerNativeIds: true,
-          payload: parsed,
-        },
-      });
+      try {
+        write({
+          jsonrpc: "2.0",
+          id,
+          method: "interaction/request",
+          params: {
+            threadId: session.threadId,
+            providerThreadId: session.providerThreadId,
+            turnId: null,
+            providerNativeIds: true,
+            payload: parsed,
+          },
+        });
+      } catch (failure) {
+        // A failed forward must release the registration and the dedupe
+        // entry, or later re-announcements would replay this rejection
+        // instead of opening a fresh interaction.
+        interactions.delete(id);
+        clearTimeout(timer);
+        reject(failure);
+      }
     });
     if (dedupe) {
       nativeAsks.set(dedupe, promise);
-      void promise.then(() => nativeAsks.delete(dedupe));
+      const release = () => nativeAsks.delete(dedupe);
+      void promise.then(release, release);
     }
     return promise;
   }
