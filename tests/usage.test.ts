@@ -25,6 +25,9 @@ describe("rateLimitFailure", () => {
     "ZCode: Provider authentication failed.",
     "ZCode: The API key status is not active.",
     "ZCode: account request failed or returned an invalid response.",
+    // CodingPlanHost.request() surfaces explicit account-service HTTP
+    // errors; they are account failures, not model rate limits.
+    "ZCode Coding Plan: account service returned HTTP 429. Reconnect Coding Plan in ZCode and retry.",
     "ZCode: Provider returned a server error.",
     // A bare 429 quoted for another reason must not tag the turn retryable.
     "ZCode: 429 files were scanned before the failure.",

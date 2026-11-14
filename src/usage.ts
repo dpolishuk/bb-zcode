@@ -78,7 +78,7 @@ export class Usage {
 /** True when a failed turn's message looks like a provider rate limit. */
 export function rateLimitFailure(message: string): boolean {
   if (
-    /context window|authentication|API key status|account request/i.test(
+    /context window|authentication|API key status|account request|account service/i.test(
       message,
     )
   )

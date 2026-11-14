@@ -9,8 +9,11 @@
   usage, warning at 80 %) read from the live quota service with a 3 s bound.
   bb's Provider retry plugin uses the reset timestamp to schedule the retry
   shortly after the window opens instead of leaving the turn failed;
-  non-quota failures and failures without a known reset stay unclassified, and
-  a failed quota read only drops the window state, never the classification.
+  non-quota failures stay unclassified, failures without a known reset keep
+  the classification but get no reset-based retry scheduling (the quota state
+  is what schedules it), and a failed quota read only drops the window state,
+  never the classification. Account-service failures with explicit HTTP
+  statuses stay account errors.
   The windows are scoped to the Coding Plan provider: a rate-limited
   personal-API model keeps the retryable classification but never adopts the
   plan's quota windows, and the separate MCP time allowance never enters the
