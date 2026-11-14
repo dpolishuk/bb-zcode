@@ -1,5 +1,23 @@
 # Knowledge log
 
+## 2026-11-09 (rate-limit retry state)
+
+- **Implemented** the push half of the quota feature: rate-limited failed
+  turns (CLI 429 classifier text and explicit HTTP-status 429 forms;
+  context-window/auth/account failures excluded) emit `provider.error` with
+  `category: "rate-limit"` and a `provider.rateLimits` subscription-window
+  state from one bounded live quota read (blocked >=100 %, warning >=80 %,
+  silent without a known reset; the 3 s deadline is enforced - a review pass
+  caught the first version's timer arm never settling, fixed in the same PR).
+  bb-side semantics are **statically checked** from the installed daemon
+  bundle and the builtin provider-retry plugin (`decideRetry` schedules the
+  retry at the blocked window's reset + 15-30 s spread, declined as
+  `no-rate-limit-state` without the delta); not exercised against a live
+  quota exhaustion. Deliberately no `rateLimited` recovery-hint fast-fail at
+  submit: it would block legitimate in-session switches to personal API
+  models. Wire semantics in
+  [quota usage protocol](contracts/quota-usage-protocol.md).
+
 ## 2026-11-09 (quota usage research and implementation)
 
 - **Found** why the quota windows were invisible in the Provider usage panel
