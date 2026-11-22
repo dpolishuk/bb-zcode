@@ -328,6 +328,9 @@ it("ignores the unknown November notification and keeps the session usable", asy
   expect(h.deltas().find((d) => d.kind === "turn.boundary")).toMatchObject({
     status: "completed",
   });
+  const boundaries = h
+    .deltas()
+    .filter((d) => d.kind === "turn.boundary").length;
   const next = await h.rpc("turn/start", {
     threadId: "thread",
     providerThreadId,
@@ -336,6 +339,19 @@ it("ignores the unknown November notification and keeps the session usable", asy
     input: [{ type: "text", text: "hello", mentions: [] }],
   });
   expect(next.error).toBeUndefined();
+  // The reply only proves acceptance; wait for the follow-up turn to
+  // actually complete.
+  await h.until(
+    () =>
+      h.deltas().filter((d) => d.kind === "turn.boundary").length ===
+      boundaries + 1,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "turn.boundary")
+      .at(-1),
+  ).toMatchObject({ status: "completed" });
 });
 
 it("settles interruption before replying, releases the child, and cold-resumes the same session", async () => {
