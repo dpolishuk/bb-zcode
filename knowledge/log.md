@@ -1,5 +1,17 @@
 # Knowledge log
 
+## 2026-11-22 (appControl read-only)
+
+- **Implemented** roadmap stage 12 as a read-only, off-by-default subset:
+  the `appControlEnabled` setting flows into runtime preferences, the CLI's
+  twelve closed `appControl/*` reverse RPCs get host answers (list/read of
+  this worker's live sessions; `session/messages` mapped onto the
+  `{id, role, text}` wire; mutations rejected with `unavailable`; caller
+  binding tied to the live connection). Wire semantics extracted from
+  upstream `packages/shared/src/app-control` + `@zcode/session-control`
+  contracts at `fec9759`. Live CLI verification pending (local Desktop
+  3.17.2 has no appControl surface); fixture-level only.
+
 ## 2026-11-22 (context composition snapshot)
 
 - **Implemented** roadmap stage 11: `contextSnapshot()` in

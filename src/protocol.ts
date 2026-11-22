@@ -233,6 +233,7 @@ export const DEFAULT_MODEL = {
   defaultReasoningEffort: "none",
 };
 export const RUNTIME_PREFERENCES = {
+  appControlEnabled: false,
   nativeSearchEnhancementsEnabled: false,
   subagentRuntimeConfigEnabled: false,
   memoryEnabled: false,

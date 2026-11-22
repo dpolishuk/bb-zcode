@@ -194,12 +194,15 @@ export class Usage {
     snapshot?: ContextSnapshot,
   ): ThreadDelta[] {
     const p = record(raw),
-      // A composition snapshot carries its own ring-aligned numbers; it can
-      // supply the meter when the projection read has none.
-      used = count(p.contextUsed) ?? snapshot?.usedTokens,
+      // A composition snapshot carries its own ring-aligned numbers, and a
+      // meter with an attached snapshot must agree with it: the projection
+      // read happens on a separate sequential fetch, so mixing the two
+      // produces contradictory totals inside one delta. The projection's
+      // values stay authoritative only for the snapshot-less fallback.
+      used = snapshot?.usedTokens ?? count(p.contextUsed),
       size =
-        count(windowOverride ?? p.contextWindow) ??
-        snapshot?.contextWindowTokens;
+        snapshot?.contextWindowTokens ??
+        count(windowOverride ?? p.contextWindow);
     if (used === undefined || size === undefined || size === 0) return [];
     return [
       {

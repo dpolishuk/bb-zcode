@@ -101,6 +101,22 @@ function harness(
             return snapshot;
           if (method === "session/usage")
             return { inputTokens: 10, outputTokens: 2, totalTokens: 12 };
+          if (method === "session/messages")
+            return {
+              messages: [
+                {
+                  info: { role: "user", messageId: "m1" },
+                  parts: [{ partId: "p1", text: "hello" }],
+                },
+                {
+                  info: { role: "assistant", messageId: "m2" },
+                  parts: [
+                    { partId: "p2", text: "world" },
+                    { partId: "p3", text: "!" },
+                  ],
+                },
+              ],
+            };
           if (method === "session/send" || method === "session/compact") {
             if (params.content === "reject")
               throw new Error("Native prompt rejected");
@@ -537,6 +553,118 @@ it("settles a rate-limited turn when the quota read never resolves", async () =>
   await h.until(
     () => h.deltas().filter((d) => d.kind === "turn.boundary").length >= 2,
   );
+});
+
+it("rejects appControl methods while the setting is off", async () => {
+  const h = harness();
+  await h.start();
+  await expect(
+    h.reverse("appControl/listSessions", {
+      callerSessionId: "native-session",
+      callId: "c1",
+      input: {},
+    }),
+  ).rejects.toThrow(/disabled/);
+});
+
+it("lists and reads live sessions through the appControl tools", async () => {
+  const h = harness();
+  await h.start({
+    options: {
+      ...options,
+      providerOptions: { ...options.providerOptions, appControlEnabled: true },
+    },
+  });
+  const listed = record(
+    await h.reverse("appControl/listSessions", {
+      callerSessionId: "native-session",
+      callId: "c1",
+      input: {},
+    }),
+  );
+  expect(listed.ok).toBe(true);
+  expect(record(listed.result).sessions).toEqual([
+    {
+      session: {
+        kind: "app",
+        workspacePath: h.cwd,
+        sessionId: "native-session",
+      },
+      title: "thread",
+      status: "idle",
+      availableActions: ["readSession"],
+    },
+  ]);
+  const summary = record(
+    await h.reverse("appControl/readSession", {
+      callerSessionId: "native-session",
+      callId: "c2",
+      input: {
+        session: {
+          kind: "app",
+          workspacePath: h.cwd,
+          sessionId: "native-session",
+        },
+        view: "summary",
+      },
+    }),
+  );
+  expect(record(record(summary.result).summary)).toMatchObject({
+    title: "thread",
+    status: "idle",
+  });
+  const messages = record(
+    await h.reverse("appControl/readSession", {
+      callerSessionId: "native-session",
+      callId: "c3",
+      input: {
+        session: {
+          kind: "app",
+          workspacePath: h.cwd,
+          sessionId: "native-session",
+        },
+        view: "messages",
+      },
+    }),
+  );
+  expect(record(messages.result).messages).toEqual([
+    { id: "m1", role: "user", text: "hello" },
+    { id: "m2", role: "assistant", text: "world\n!" },
+  ]);
+});
+
+it("rejects appControl mutations and foreign bindings", async () => {
+  const h = harness();
+  await h.start({
+    options: {
+      ...options,
+      providerOptions: { ...options.providerOptions, appControlEnabled: true },
+    },
+  });
+  const denied = record(
+    await h.reverse("appControl/sendToSession", {
+      callerSessionId: "native-session",
+      callId: "c1",
+      input: {
+        session: {
+          kind: "app",
+          workspacePath: h.cwd,
+          sessionId: "native-session",
+        },
+        prompt: "hi",
+        requestId: "r1",
+      },
+    }),
+  );
+  expect(denied).toMatchObject({ ok: false, error: { code: "unavailable" } });
+  const foreign = record(
+    await h.reverse("appControl/listSessions", {
+      callerSessionId: "sess_someone-else",
+      callId: "c2",
+      input: {},
+    }),
+  );
+  expect(foreign).toMatchObject({ ok: false, error: { code: "unavailable" } });
 });
 
 it("returns typed stale-turn recovery after the target turn has completed", async () => {

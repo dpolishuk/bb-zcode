@@ -220,15 +220,23 @@ it, and the composition query is read-only so a timeout drops only the
 snapshot. The fixture covers both CLI generations; the local Desktop was
 still 3.17.2, so the live happy path on 3.18.x is pending the app update.
 
-## Stage 12 — appControl investigation (decision required)
+## Stage 12 — appControl read-only discovery — done 2026-11-22
 
-`appControlEnabled: true` in runtime preferences injects twelve
-session-control tools whose reverse RPCs the host must answer - upstream
-built it for the Desktop App to list/read/drive local CLI sessions. In bb
-this overlaps bb's own thread tools and widens the agent's reach across
-sessions, so it needs an explicit maintainer decision (same posture as the
-self-hosted browser provider in stage 5) before any implementation. Park
-until stage 11 lands.
+Decision: ship the read-only subset behind an off-by-default setting
+(`appControlEnabled`), the same posture as automations and dynamic
+workflows. With it on, the runtime-preferences flag makes the CLI >= 3.18
+register the native App-control tools, and the bridge answers the twelve
+closed `appControl/*` intents: `listProjects` (empty, host scope),
+`listSessions` (this worker's live Zcode sessions as
+`{kind: app, sessionId, workspacePath}` summaries with running/idle status),
+`readSession` (summary, or `messages` mapped from the native
+`session/messages` lane, read-only and bounded), and `appControl/cancel`
+(`{cancelled: false}`). Every mutating or UI action - create, fork, send,
+wait, interrupt, rename, open, archive, pin - is rejected with the stable
+`unavailable` code, and the caller binding must match the session the
+reverse request arrived on. Security note recorded in the setting
+description: any session started with the setting on can read the other
+live ZCode threads of this bb.
 
 ## Out of scope additions (November surface)
 

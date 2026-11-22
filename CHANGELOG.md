@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add opt-in ZCode session-control tools (roadmap stage 12): with the new
+  `appControlEnabled` setting on (default off), a ZCode session on CLI >=
+  3.18 gains the native App-control tools, and the bridge answers the
+  closed `appControl/*` reverse RPCs - it can list this bb's other live
+  ZCode sessions and read their transcripts (summary or messages via the
+  native `session/messages` lane), while every mutating or UI action
+  (create/fork/send/wait/interrupt/rename/open/archive/pin) is rejected
+  with a stable `unavailable` error and the caller binding is checked
+  against the live connection. Sessions in other threads become readable
+  by any session started with the setting on.
+
 - Show what fills the context window: after a turn settles, the bridge asks
   the CLI's context-composition query (CLI >= 3.18; older CLIs answer
   method-not-found and keep the plain meter) and attaches a rich snapshot to
