@@ -190,7 +190,10 @@ schema-validated but not yet eyeballed in an installed bb run, and
 `threadPanelAction` is retired in newer SDK typings (migration needs an SDK
 bump).
 
-## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — done 2026-11-22
+## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — fixtures done 2026-11-22, live pass pending
+
+Fixture-level degradation coverage is done; the live suite on Desktop
+3.18.x remains and lands when the local app updates.
 
 Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
 methods (`plugins/readUserOptions`, `plugins/mentionItems`,

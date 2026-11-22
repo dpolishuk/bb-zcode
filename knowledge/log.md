@@ -9,20 +9,6 @@
   session fully usable afterwards. The wire surface the plugin speaks
   (create/resume/preferences/v4 commands) is unchanged.
 
-`contextSnapshot()` in
-`src/usage.ts` maps the native `v4/conversation/contextComposition`
-measurement onto the contextWindow delta's rich snapshot (11 fine
-categories -> used/reserved/deferred kinds, entries capped at the wire
-limits, synthetic free bucket, ring-aligned used/window totals; only
-request-phase measurements map). `finishTurn` queries it after
-`session/read` behind a 2 s bound with a per-session revision guard;
-older CLIs keep the plain meter, and a snapshot-less projection can now
-still emit the meter from the composition's own numbers. Fixture tests
-cover both CLI generations plus the November unknown surfaces
-(credential-cipher reverse request, plugins-degraded notification).
-Local Desktop remains 3.17.2 - live 3.18.x verification pending the app
-update.
-
 ## 2026-11-22 (November upstream plan)
 
 - **Researched** upstream v3.17.2–v3.18.2 (syncs `a9fe401`..`fec9759`):
