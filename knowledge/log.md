@@ -1,5 +1,20 @@
 # Knowledge log
 
+## 2026-11-22 (context composition snapshot)
+
+- **Implemented** roadmap stage 11: `contextSnapshot()` in
+  `src/usage.ts` maps the native `v4/conversation/contextComposition`
+  measurement onto the contextWindow delta's rich snapshot (11 fine
+  categories -> used/reserved/deferred kinds, entries capped at the wire
+  limits, synthetic free bucket recomputed from the bridge-supplied
+  reporting window so budget variants stay consistent; only request-phase
+  measurements map). `finishTurn` queries it after `session/read` behind a
+  2 s read-only bound (a slow read drops the snapshot, never the child)
+  with a per-session revision guard; older CLIs keep the plain meter, and
+  a snapshot-less projection can still emit the meter from the
+  composition's own numbers. Local Desktop remains 3.17.2 - live 3.18.x
+  verification pending the app update.
+
 ## 2026-11-22 (November upstream verification)
 
 - **Verified** the November upstream surface (v3.17.2-v3.18.2, sync
