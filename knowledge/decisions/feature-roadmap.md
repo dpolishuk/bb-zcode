@@ -209,43 +209,7 @@ sign-in), smoke the workflow journal against the WebSearch-budget driver,
 and refresh the pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
-## Stage 11 — context composition to the rich context snapshot
-
-Implementation notes (2026-11-22): the fixture covers both CLI generations
-(composition served vs method-not-found) and the November unknown surfaces;
-the local Desktop was still 3.17.2 at implementation time, so the live
-happy path on 3.18.x is pending the app update - the mapping is
-fixture-verified and degrades live. The snapshot also supplies the meter
-numbers (ring-aligned `providerContextTokens`/`contextWindow`) when the
-projection read carries none.
-
-The audit's long-standing "contextWindow delta accepts a rich snapshot the
-plugin does not send" gap. Query
-`v4/conversation/contextComposition` (same v4 read lane as `rowsRange`;
-method-not-found on older CLIs degrades to today's plain delta) after a
-turn settles and map it into the delta's `snapshot`:
-
-- native items (`name` <=200 chars, <=50 per category) become entries
-  `{id, label, tokens}`;
-- native fine categories (11 ids: `system_prompt`, `meta_user_context`,
-  `skills`, `tool_prompt`, `system_tool_schemas`, `mcp_tool_schemas`,
-  `app_tool_schemas`, `deferred_tool_schemas`, `reminders`,
-  `compact_summary`, `messages`) map to bb's four snapshot kinds:
-  conversation content (`messages`, `compact_summary`, `reminders`,
-  `meta_user_context`) to `used`, static overhead (`system_prompt`,
-  `tool_prompt`, `skills`, loaded tool schemas) to `reserved`,
-  `deferred_tool_schemas` to `deferred`; `free` stays computed from
-  `contextWindowTokens - usedTokens`;
-- `usedTokens`/`contextWindowTokens` from the projection read that already
-  happens in `finishTurn`; `autoCompactAtTokens` from native metadata when
-  exposed, else `null`; `capturedAt`/`estimated`/`model`/
-  `providerSessionId`/`providerTurnId` filled by the bridge;
-- revision guard: the query result carries a revision; a stale read (turn
-  settled again meanwhile) is dropped, not emitted.
-
-Push variant (optional follow-up): subscribe to the
-`contextCompositionChanged` notification for live updates between turns on
-supported CLIs.
+## Stage 11 — context composition to the rich context snapshot (next)
 
 ## Stage 12 — appControl investigation (decision required)
 
