@@ -190,7 +190,7 @@ schema-validated but not yet eyeballed in an installed bb run, and
 `threadPanelAction` is retired in newer SDK typings (migration needs an SDK
 bump).
 
-## Stage 10 — November upstream verification (v3.17.2–v3.18.2)
+## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — done 2026-11-22
 
 Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
 methods (`plugins/readUserOptions`, `plugins/mentionItems`,
@@ -209,7 +209,7 @@ sign-in), smoke the workflow journal against the WebSearch-budget driver,
 and refresh the pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
-## Stage 11 — context composition to the rich context snapshot
+## Stage 11 — context composition to the rich context snapshot — done 2026-11-22
 
 The audit's long-standing "contextWindow delta accepts a rich snapshot the
 plugin does not send" gap. Query
@@ -238,6 +238,14 @@ turn settles and map it into the delta's `snapshot`:
 Push variant (optional follow-up): subscribe to the
 `contextCompositionChanged` notification for live updates between turns on
 supported CLIs.
+
+Implementation notes (2026-11-22): the fixture covers both CLI generations
+(composition served vs method-not-found) and the November unknown surfaces;
+the local Desktop was still 3.17.2 at implementation time, so the live
+happy path on 3.18.x is pending the app update - the mapping is
+fixture-verified and degrades live. The snapshot also supplies the meter
+numbers (ring-aligned `providerContextTokens`/`contextWindow`) when the
+projection read carries none.
 
 ## Stage 12 — appControl investigation (decision required)
 

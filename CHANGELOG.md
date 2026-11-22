@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Show what fills the context window: after a turn settles, the bridge asks
+  the CLI's context-composition query (CLI >= 3.18; older CLIs answer
+  method-not-found and keep the plain meter) and attaches a rich snapshot to
+  the contextWindow delta - native categories mapped onto bb's
+  used/reserved/deferred kinds (conversation content, prompt overhead,
+  deferred tool schemas) with per-entry token counts, a computed free
+  bucket, the model, and the ring-aligned used/window totals. A per-session
+  revision guard drops measurements that raced a newer settle. Verified the
+  November upstream surface (v3.17.2-v3.18.2) degrades cleanly: the unknown
+  credential-cipher reverse request and the plugins-degraded notification
+  leave the session fully usable.
+
 ## 0.16.0 — 2026-11-15
 
 - Stop unanswered ZCode questions from duplicating in the chat. While an
