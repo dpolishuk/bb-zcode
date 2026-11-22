@@ -62,10 +62,6 @@ async function run(p) {
   sessions.get(sessionId).turn++;
   event(sessionId, "turn.started", { inputId: p.inputId });
   if (p.content === "hang") return;
-  if (p.content === "composition-off") {
-    // Marks the session as served by a pre-3.18 CLI.
-    sessions.get(sessionId).oldCli = true;
-  }
   if (p.content === "unknown-rpc") {
     // November CLI surface the host does not implement: the bridge must
     // reply with a typed error and the session must keep working.
@@ -229,7 +225,7 @@ input.on("line", async (line) => {
     const stored = existsSync(file)
       ? JSON.parse(readFileSync(file, "utf8"))
       : {};
-    sessions.set(id, { seq: 0, turn: 0, rows: [], composition: 0, ...stored });
+    sessions.set(id, { seq: 0, turn: 0, rows: [], ...stored });
     writeFileSync(file, JSON.stringify(sessions.get(id)));
     send({ id: m.id, result: snapshot(id) });
   } else if (m.method === "session/read")
@@ -245,65 +241,7 @@ input.on("line", async (line) => {
         hasMore: false,
       },
     });
-  else if (m.method === "v4/conversation/contextComposition") {
-    const session = sessions.get(p.sessionId);
-    if (!session || session.oldCli) {
-      // Old CLIs do not know the method; the bridge degrades to the plain
-      // context meter.
-      send({ id: m.id, error: { code: -32601, message: "Method not found" } });
-      return;
-    }
-    session.composition += 1;
-    send({
-      id: m.id,
-      result: {
-        composition: {
-          sessionId: p.sessionId,
-          revision: session.composition,
-          phase: "request",
-          measuredAt: Date.now(),
-          model: {
-            providerId: "test",
-            modelId: "model",
-            contextWindow: 200000,
-          },
-          tokenMethod: "estimated",
-          estimatedTokens: 900,
-          providerInputTokens: 880,
-          providerContextTokens: 1000,
-          freeTokens: 199000,
-          categories: [
-            {
-              id: "system_prompt",
-              tokens: 300,
-              chars: 1200,
-              items: [{ name: "root prompt", tokens: 300 }],
-            },
-            {
-              id: "messages",
-              tokens: 600,
-              chars: 2400,
-              items: [
-                { name: "user: hello", tokens: 350 },
-                { name: "assistant: world", tokens: 250 },
-              ],
-            },
-            {
-              id: "deferred_tool_schemas",
-              tokens: 100,
-              chars: 400,
-              items: [{ name: "mcp: search (deferred)", tokens: 100 }],
-            },
-            {
-              id: "draft-preview-only",
-              tokens: 1,
-              chars: 1,
-            },
-          ],
-        },
-      },
-    });
-  } else if (m.method === "v4/command" && p.type === "forkAssistant") {
+  else if (m.method === "v4/command" && p.type === "forkAssistant") {
     const source = sessions.get(p.sessionId),
       child = `sess_${randomUUID()}`;
     const rows = source.rows.filter((r) => r.rowId <= p.payload.target.rowId);

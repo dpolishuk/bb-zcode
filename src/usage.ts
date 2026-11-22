@@ -3,149 +3,11 @@ import {
   ZERO_TOKEN_USAGE,
   type ThreadDelta,
 } from "@get-bb/plugin-sdk/provider-bridge";
-import { record, text } from "./protocol.js";
+import { record } from "./protocol.js";
 import type { UsageWindow } from "./coding-plan.js";
 
 const count = (v: unknown): number | undefined =>
   typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
-
-/** bb's rich context snapshot carried on the contextWindow delta. */
-export interface ContextSnapshot {
-  autoCompactAtTokens: number | null;
-  capturedAt: string;
-  categories: Array<{
-    entries: Array<{ id: string; label: string; tokens: number }>;
-    id: string;
-    kind: "deferred" | "free" | "reserved" | "used";
-    label: string;
-    tokens: number;
-  }>;
-  contextWindowTokens: number;
-  estimated: boolean;
-  model: string;
-  providerSessionId: string;
-  providerTurnId: string | null;
-  usedTokens: number;
-}
-
-// Native context-composition fine categories (upstream
-// zcode-protocol-v4/context-composition) mapped onto bb's four snapshot
-// kinds: conversation content is used, static prompt overhead is reserved,
-// not-yet-loaded tool schemas are deferred.
-const SNAPSHOT_KIND_BY_CATEGORY: Record<
-  string,
-  ContextSnapshot["categories"][number]["kind"]
-> = {
-  messages: "used",
-  compact_summary: "used",
-  reminders: "used",
-  meta_user_context: "used",
-  system_prompt: "reserved",
-  tool_prompt: "reserved",
-  skills: "reserved",
-  system_tool_schemas: "reserved",
-  mcp_tool_schemas: "reserved",
-  app_tool_schemas: "reserved",
-  deferred_tool_schemas: "deferred",
-};
-const CATEGORY_LABELS: Record<string, string> = {
-  system_prompt: "System prompt",
-  meta_user_context: "User context",
-  skills: "Skills",
-  tool_prompt: "Tool prompt",
-  system_tool_schemas: "System tool schemas",
-  mcp_tool_schemas: "MCP tool schemas",
-  app_tool_schemas: "App tool schemas",
-  deferred_tool_schemas: "Deferred tool schemas",
-  reminders: "Reminders",
-  compact_summary: "Compact summary",
-  messages: "Messages",
-};
-
-/**
- * Maps one native `v4/conversation/contextComposition` measurement onto
- * bb's rich context snapshot. Only request-phase measurements map; each
- * native category keeps its identity with the projected kind, and the
- * native `freeTokens` becomes a synthetic free category. Returns undefined
- * for anything that is not a usable request-phase measurement - callers
- * keep their plain contextWindow delta in that case.
- */
-export function contextSnapshot(
-  composition: unknown,
-  fallback: {
-    size: number | null | undefined;
-    sessionId: string;
-    turnId: string | null;
-  },
-): ContextSnapshot | undefined {
-  const c = record(composition);
-  if (text(c.phase) !== "request") return undefined;
-  const model = record(c.model);
-  const providerId = text(model.providerId),
-    modelId = text(model.modelId);
-  if (!providerId || !modelId) return undefined;
-  const size = count(model.contextWindow) ?? fallback.size ?? null;
-  if (size === null || size === 0) return undefined;
-  const entries = (Array.isArray(c.categories) ? c.categories : [])
-    .map(record)
-    .map((category) => {
-      const id = text(category.id);
-      const kind = SNAPSHOT_KIND_BY_CATEGORY[id];
-      const tokens = count(category.tokens);
-      if (!kind || tokens === undefined) return undefined;
-      const items = Array.isArray(category.items) ? category.items : [];
-      return {
-        entries: items.slice(0, 50).map((item, index) => {
-          const row = record(item);
-          return {
-            id: `${id}:${index}`,
-            label: text(row.name, id).slice(0, 200),
-            tokens: count(row.tokens) ?? 0,
-          };
-        }),
-        id,
-        kind,
-        label: CATEGORY_LABELS[id] ?? id,
-        tokens,
-      };
-    })
-    .filter(
-      (category): category is ContextSnapshot["categories"][number] =>
-        category !== undefined,
-    );
-  const free = c.freeTokens === null ? null : (count(c.freeTokens) ?? null);
-  const usedTokens =
-    count(c.providerContextTokens) ?? count(c.estimatedTokens) ?? 0;
-  const measuredAt = count(c.measuredAt);
-  return {
-    autoCompactAtTokens: null,
-    capturedAt: new Date(measuredAt ?? Date.now()).toISOString(),
-    categories: withFree(entries, free),
-    contextWindowTokens: size,
-    estimated: true,
-    model: `${providerId}/${modelId}`,
-    providerSessionId: text(c.sessionId) || fallback.sessionId,
-    providerTurnId: fallback.turnId,
-    usedTokens,
-  };
-}
-
-function withFree(
-  categories: ContextSnapshot["categories"],
-  free: number | null,
-): ContextSnapshot["categories"] {
-  if (free === null || free <= 0) return categories;
-  return [
-    ...categories,
-    {
-      entries: [],
-      id: "free",
-      kind: "free",
-      label: "Free",
-      tokens: free,
-    },
-  ];
-}
 
 export class Usage {
   private total = { ...ZERO_TOKEN_USAGE };
@@ -184,18 +46,10 @@ export class Usage {
     ];
   }
 
-  context(
-    raw: unknown,
-    windowOverride?: number,
-    snapshot?: ContextSnapshot,
-  ): ThreadDelta[] {
+  context(raw: unknown, windowOverride?: number): ThreadDelta[] {
     const p = record(raw),
-      // A composition snapshot carries its own ring-aligned numbers; it can
-      // supply the meter when the projection read has none.
-      used = count(p.contextUsed) ?? snapshot?.usedTokens,
-      size =
-        count(windowOverride ?? p.contextWindow) ??
-        snapshot?.contextWindowTokens;
+      used = count(p.contextUsed),
+      size = count(windowOverride ?? p.contextWindow);
     if (used === undefined || size === undefined || size === 0) return [];
     return [
       {
@@ -204,7 +58,6 @@ export class Usage {
         size,
         estimated: true,
         attach: "currentOrLast",
-        ...(snapshot ? { snapshot } : {}),
       },
     ];
   }

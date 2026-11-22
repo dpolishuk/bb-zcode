@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Usage, contextSnapshot, rateLimitFailure } from "../src/usage.js";
+import { Usage, rateLimitFailure } from "../src/usage.js";
 import type { UsageWindow } from "../src/coding-plan.js";
 
 const windows = (overrides: Partial<UsageWindow>[]): UsageWindow[] =>
@@ -8,119 +8,6 @@ const windows = (overrides: Partial<UsageWindow>[]): UsageWindow[] =>
     usedPercent: w.usedPercent ?? 0,
     resetsAt: w.resetsAt ?? null,
   }));
-
-describe("contextSnapshot", () => {
-  const composition = {
-    sessionId: "native-session",
-    revision: 3,
-    phase: "request",
-    measuredAt: 1_700_000_000_000,
-    model: { providerId: "test", modelId: "model", contextWindow: 200000 },
-    tokenMethod: "estimated",
-    estimatedTokens: 900,
-    providerContextTokens: 1000,
-    freeTokens: 199000,
-    categories: [
-      {
-        id: "system_prompt",
-        tokens: 300,
-        items: [{ name: "root prompt", tokens: 300 }],
-      },
-      {
-        id: "messages",
-        tokens: 600,
-        items: [
-          { name: "user: hello", tokens: 350 },
-          { name: "assistant: world", tokens: 250 },
-        ],
-      },
-      { id: "deferred_tool_schemas", tokens: 100, items: [] },
-      { id: "not-a-category", tokens: 1 },
-    ],
-  };
-
-  it("maps a request-phase composition onto the bb snapshot grammar", () => {
-    expect(
-      contextSnapshot(composition, {
-        size: null,
-        sessionId: "native-session",
-        turnId: "turn-1",
-      }),
-    ).toEqual({
-      autoCompactAtTokens: null,
-      capturedAt: new Date(1_700_000_000_000).toISOString(),
-      categories: [
-        {
-          entries: [
-            { id: "system_prompt:0", label: "root prompt", tokens: 300 },
-          ],
-          id: "system_prompt",
-          kind: "reserved",
-          label: "System prompt",
-          tokens: 300,
-        },
-        {
-          entries: [
-            { id: "messages:0", label: "user: hello", tokens: 350 },
-            { id: "messages:1", label: "assistant: world", tokens: 250 },
-          ],
-          id: "messages",
-          kind: "used",
-          label: "Messages",
-          tokens: 600,
-        },
-        {
-          entries: [],
-          id: "deferred_tool_schemas",
-          kind: "deferred",
-          label: "Deferred tool schemas",
-          tokens: 100,
-        },
-        {
-          entries: [],
-          id: "free",
-          kind: "free",
-          label: "Free",
-          tokens: 199000,
-        },
-      ],
-      contextWindowTokens: 200000,
-      estimated: true,
-      model: "test/model",
-      providerSessionId: "native-session",
-      providerTurnId: "turn-1",
-      usedTokens: 1000,
-    });
-  });
-
-  it("falls back to the provided window and drops unusable measurements", () => {
-    const noWindow = structuredClone(composition);
-    (noWindow.model as { contextWindow: number | null }).contextWindow = null;
-    expect(
-      contextSnapshot(noWindow, {
-        size: 100000,
-        sessionId: "s",
-        turnId: null,
-      }),
-    ).toMatchObject({ contextWindowTokens: 100000 });
-
-    const draft = structuredClone(composition);
-    draft.phase = "draft-preview";
-    expect(
-      contextSnapshot(draft, { size: 1000, sessionId: "s", turnId: null }),
-    ).toBeUndefined();
-
-    const modelless = structuredClone(composition);
-    modelless.model = {
-      providerId: "",
-      modelId: "",
-      contextWindow: 1,
-    } as typeof composition.model;
-    expect(
-      contextSnapshot(modelless, { size: 1000, sessionId: "s", turnId: null }),
-    ).toBeUndefined();
-  });
-});
 
 describe("rateLimitFailure", () => {
   it.each([

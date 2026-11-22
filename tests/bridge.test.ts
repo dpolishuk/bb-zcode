@@ -294,62 +294,6 @@ it("joins re-announced native questions into one pending interaction", async () 
   );
 });
 
-it("attaches the context-composition snapshot to the context meter", async () => {
-  const h = harness();
-  const providerThreadId = await h.start();
-  await h.rpc("turn/start", {
-    threadId: "thread",
-    providerThreadId,
-    options,
-    clientRequestId: "creq_abcdefghij",
-    input: [{ type: "text", text: "hello", mentions: [] }],
-  });
-  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
-  const meter = h.deltas().find((d) => d.kind === "contextWindow") as Record<
-    string,
-    unknown
-  >;
-  expect(meter).toBeDefined();
-  expect(meter.snapshot).toMatchObject({
-    autoCompactAtTokens: null,
-    contextWindowTokens: 200000,
-    estimated: true,
-    model: "test/model",
-    providerSessionId: providerThreadId,
-    providerTurnId: "native-turn-1",
-    usedTokens: 1000,
-  });
-  const categories = (
-    record(meter.snapshot).categories as Array<Record<string, unknown>>
-  ).map((c) => ({ id: c.id, kind: c.kind }));
-  expect(categories).toEqual([
-    { id: "system_prompt", kind: "reserved" },
-    { id: "messages", kind: "used" },
-    { id: "deferred_tool_schemas", kind: "deferred" },
-    { id: "free", kind: "free" },
-  ]);
-});
-
-it("keeps the plain context meter when the CLI has no composition query", async () => {
-  const h = harness();
-  const providerThreadId = await h.start();
-  await h.rpc("turn/start", {
-    threadId: "thread",
-    providerThreadId,
-    options,
-    clientRequestId: "creq_abcdefghij",
-    input: [{ type: "text", text: "composition-off", mentions: [] }],
-  });
-  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
-  // The fixture projection carries no context meter of its own, so the
-  // assertion is simply that no delta ever carries a snapshot.
-  const meter = h.deltas().find((d) => d.kind === "contextWindow") as Record<
-    string,
-    unknown
-  >;
-  expect(meter?.snapshot).toBeUndefined();
-});
-
 it.each(["unknown-rpc", "unknown-notification"])(
   "survives the November surface %s and keeps the session usable",
   async (prompt) => {
