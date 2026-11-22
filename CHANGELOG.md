@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 2026-11-22
 
 - Add opt-in ZCode session-control tools (roadmap stage 12): with the new
   `appControlEnabled` setting on (default off), a ZCode session on CLI >=
