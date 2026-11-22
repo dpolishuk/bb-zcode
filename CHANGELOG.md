@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Verify the November upstream surface (v3.17.2-v3.18.2): the new
+  credential-cipher reverse request and the plugins-degraded notification
+  degrade cleanly - the bridge answers the unknown request with a typed
+  error and ignores the unknown notification, leaving the session fully
+  usable for the next turn.
+
 ## 0.16.0 — 2026-11-15
 
 - Stop unanswered ZCode questions from duplicating in the chat. While an

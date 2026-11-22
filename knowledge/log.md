@@ -1,5 +1,14 @@
 # Knowledge log
 
+## 2026-11-22 (November upstream verification)
+
+- **Verified** the November upstream surface (v3.17.2-v3.18.2, sync
+  `fec9759`): fixture prompts prove the bridge survives the new unknown
+  reverse request (`interaction/requestCredentialCipher` - typed error
+  reply) and notification (`startup/pluginsDegraded` - ignored) with the
+  session fully usable afterwards. The wire surface the plugin speaks
+  (create/resume/preferences/v4 commands) is unchanged.
+
 ## 2026-11-22 (November upstream plan)
 
 - **Researched** upstream v3.17.2–v3.18.2 (syncs `a9fe401`..`fec9759`):

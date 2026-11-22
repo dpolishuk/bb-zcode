@@ -190,7 +190,10 @@ schema-validated but not yet eyeballed in an installed bb run, and
 `threadPanelAction` is retired in newer SDK typings (migration needs an SDK
 bump).
 
-## Stage 10 — November upstream verification (v3.17.2–v3.18.2)
+## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — fixtures done 2026-11-22, live pass pending
+
+Fixture-level degradation coverage is done; the live suite on Desktop
+3.18.x remains and lands when the local app updates.
 
 Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
 methods (`plugins/readUserOptions`, `plugins/mentionItems`,
@@ -209,35 +212,7 @@ sign-in), smoke the workflow journal against the WebSearch-budget driver,
 and refresh the pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
-## Stage 11 — context composition to the rich context snapshot
-
-The audit's long-standing "contextWindow delta accepts a rich snapshot the
-plugin does not send" gap. Query
-`v4/conversation/contextComposition` (same v4 read lane as `rowsRange`;
-method-not-found on older CLIs degrades to today's plain delta) after a
-turn settles and map it into the delta's `snapshot`:
-
-- native items (`name` <=200 chars, <=50 per category) become entries
-  `{id, label, tokens}`;
-- native fine categories (11 ids: `system_prompt`, `meta_user_context`,
-  `skills`, `tool_prompt`, `system_tool_schemas`, `mcp_tool_schemas`,
-  `app_tool_schemas`, `deferred_tool_schemas`, `reminders`,
-  `compact_summary`, `messages`) map to bb's four snapshot kinds:
-  conversation content (`messages`, `compact_summary`, `reminders`,
-  `meta_user_context`) to `used`, static overhead (`system_prompt`,
-  `tool_prompt`, `skills`, loaded tool schemas) to `reserved`,
-  `deferred_tool_schemas` to `deferred`; `free` stays computed from
-  `contextWindowTokens - usedTokens`;
-- `usedTokens`/`contextWindowTokens` from the projection read that already
-  happens in `finishTurn`; `autoCompactAtTokens` from native metadata when
-  exposed, else `null`; `capturedAt`/`estimated`/`model`/
-  `providerSessionId`/`providerTurnId` filled by the bridge;
-- revision guard: the query result carries a revision; a stale read (turn
-  settled again meanwhile) is dropped, not emitted.
-
-Push variant (optional follow-up): subscribe to the
-`contextCompositionChanged` notification for live updates between turns on
-supported CLIs.
+## Stage 11 — context composition to the rich context snapshot (next)
 
 ## Stage 12 — appControl investigation (decision required)
 

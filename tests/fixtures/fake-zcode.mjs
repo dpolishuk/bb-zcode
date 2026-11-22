@@ -62,6 +62,32 @@ async function run(p) {
   sessions.get(sessionId).turn++;
   event(sessionId, "turn.started", { inputId: p.inputId });
   if (p.content === "hang") return;
+  if (p.content === "unknown-rpc") {
+    // November CLI surface the host does not implement: the bridge must
+    // reply with the typed -32601 fallback and the session must keep
+    // working. host() resolves only results, so capture the raw reply
+    // (error envelopes included) through the pending map and persist it
+    // for the test to assert.
+    const id = randomUUID();
+    const reply = await new Promise((resolve) => {
+      pending.set(id, (value) => resolve(value));
+      send({
+        id,
+        method: "interaction/requestCredentialCipher",
+        params: { sessionId, purpose: "fixture" },
+      });
+    });
+    writeFileSync(
+      join(process.cwd(), sessionId + ".unknown-rpc.json"),
+      JSON.stringify(reply ?? { missing: true }),
+    );
+  }
+  if (p.content === "unknown-notification") {
+    send({
+      method: "startup/pluginsDegraded",
+      params: { sessionId, degraded: ["fixture-plugin"] },
+    });
+  }
   if (p.content === "crash") {
     process.exitCode = 2;
     input.close();
@@ -192,7 +218,7 @@ async function run(p) {
 input.on("line", async (line) => {
   const m = JSON.parse(line);
   if (!m.method) {
-    pending.get(m.id)?.(m.result);
+    pending.get(m.id)?.(m.result ?? (m.error ? { error: m.error } : undefined));
     pending.delete(m.id);
     return;
   }

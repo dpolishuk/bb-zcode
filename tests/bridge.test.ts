@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -292,6 +292,66 @@ it("joins re-announced native questions into one pending interaction", async () 
     () =>
       h.messages.filter((m) => m.method === "interaction/request").length === 2,
   );
+});
+
+it("answers the unknown November reverse request with the typed fallback", async () => {
+  const h = harness();
+  const providerThreadId = await h.start();
+  await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghij",
+    input: [{ type: "text", text: "unknown-rpc", mentions: [] }],
+  });
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  // The fixture persists the envelope the bridge sent back for the
+  // credential-cipher request: the typed -32601 host fallback.
+  const envelope = JSON.parse(
+    readFileSync(join(h.cwd, `${providerThreadId}.unknown-rpc.json`), "utf8"),
+  );
+  expect(record(envelope.error)).toMatchObject({ code: -32601 });
+});
+
+it("ignores the unknown November notification and keeps the session usable", async () => {
+  const h = harness();
+  const providerThreadId = await h.start();
+  const reply = await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghij",
+    input: [{ type: "text", text: "unknown-notification", mentions: [] }],
+  });
+  expect(reply.error).toBeUndefined();
+  await h.until(() => h.deltas().some((d) => d.kind === "turn.boundary"));
+  expect(h.deltas().find((d) => d.kind === "turn.boundary")).toMatchObject({
+    status: "completed",
+  });
+  const boundaries = h
+    .deltas()
+    .filter((d) => d.kind === "turn.boundary").length;
+  const next = await h.rpc("turn/start", {
+    threadId: "thread",
+    providerThreadId,
+    options,
+    clientRequestId: "creq_abcdefghik",
+    input: [{ type: "text", text: "hello", mentions: [] }],
+  });
+  expect(next.error).toBeUndefined();
+  // The reply only proves acceptance; wait for the follow-up turn to
+  // actually complete.
+  await h.until(
+    () =>
+      h.deltas().filter((d) => d.kind === "turn.boundary").length ===
+      boundaries + 1,
+  );
+  expect(
+    h
+      .deltas()
+      .filter((d) => d.kind === "turn.boundary")
+      .at(-1),
+  ).toMatchObject({ status: "completed" });
 });
 
 it("settles interruption before replying, releases the child, and cold-resumes the same session", async () => {
