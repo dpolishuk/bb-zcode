@@ -158,6 +158,15 @@ Plan label, and its live quota windows (5-hour, weekly, MCP) with reset times
 from the plan's quota service, cached for a minute. Windows the service does
 not report numbers for stay hidden rather than guessed.
 
+## Session-control tools
+
+The `ZCode session-control tools` setting (off by default) enables the
+native App-control tools on CLI 3.18+: a session can list this bb's other
+live ZCode sessions and read their transcripts. Creating, sending,
+interrupting or otherwise mutating other sessions is rejected by the
+bridge. Treat it as cross-thread read access: any session started with
+the setting on can read every other live ZCode thread of this bb.
+
 ## Individual Coding Plan
 
 Sign in to ZCode Desktop on the same machine and OS user that runs bb. Select

@@ -1030,6 +1030,155 @@ export function createBridge(
     return promise;
   }
 
+  /**
+   * The native App-control tools (upstream session-control surface, CLI >=
+   * 3.18): twelve closed reverse-RPC intents the host answers with a
+   * discriminated ok/error envelope. bb's v1 surface is read-only discovery
+   * over this worker's live ZCode sessions - listing and reading sibling
+   * threads' transcripts - while every mutating or UI action is rejected
+   * with a stable `unavailable` code. Gated by the plugin's appControl
+   * setting through the runtime-preferences flag; with it off the CLI never
+   * registers the tools and the methods fall through to the typed
+   * not-implemented reply.
+   */
+  async function appControl(
+    session: Session | undefined,
+    method: string,
+    raw: unknown,
+    context?: {
+      account: AccountHost;
+      cwd: string;
+      preferences: typeof RUNTIME_PREFERENCES;
+      subagents?: Subagents;
+      nativeSessionId?: string;
+    },
+  ): Promise<unknown> {
+    const p = record(raw);
+    const deny = (message: string) => ({
+      ok: false as const,
+      error: { code: "unavailable" as const, message },
+    });
+    if (context?.preferences.appControlEnabled !== true)
+      throw new ProtocolError(
+        "ZCode session-control tools are disabled. Enable the plugin's appControl setting.",
+        -32601,
+      );
+    // The binding fields are injected by the CLI tool runtime; the host
+    // must still tie the call to the live connection it arrived on.
+    if (!session || text(p.callerSessionId) !== session.providerThreadId)
+      return deny("The calling session is not available on this host.");
+    const action = method.slice("appControl/".length);
+    if (action === "cancel") return { cancelled: false };
+    if (action === "listProjects")
+      return {
+        ok: true as const,
+        result: {
+          projects: [],
+          searchScope: {
+            scopes: [{ kind: "app", scope: "host" }],
+            unavailableSources: [],
+          },
+        },
+      };
+    if (action === "listSessions") {
+      const sessionsOut = [...sessions.values()]
+        .filter((s) => !s.stopping)
+        .map((s) => ({
+          session: {
+            kind: "app" as const,
+            workspacePath: s.cwd,
+            sessionId: s.providerThreadId,
+          },
+          title: s.threadId,
+          status: s.timeline ? ("running" as const) : ("idle" as const),
+          availableActions: ["readSession" as const],
+        }));
+      return {
+        ok: true as const,
+        result: {
+          sessions: sessionsOut,
+          searchScope: {
+            scopes: [{ kind: "app", scope: "host" }],
+            unavailableSources: [],
+          },
+        },
+      };
+    }
+    if (action === "readSession") {
+      const input = record(p.input);
+      const target =
+        text(record(input.session).sessionId) || text(input.sessionId) || "";
+      const sibling = [...sessions.values()].find(
+        (s) => s.providerThreadId === target && !s.stopping,
+      );
+      if (!sibling) return deny("That session is not live on this host.");
+      if (input.view === "messages") {
+        try {
+          const reply = record(
+            await sibling.client.request(
+              "session/messages",
+              {
+                sessionId: sibling.providerThreadId,
+                ...(typeof input.afterMessageId === "string"
+                  ? { afterMessageId: input.afterMessageId }
+                  : {}),
+                ...(typeof input.limit === "number"
+                  ? { limit: input.limit }
+                  : {}),
+              },
+              5000,
+              true,
+            ),
+          );
+          const messages = (Array.isArray(reply.messages) ? reply.messages : [])
+            .map(record)
+            .map((m) => {
+              const info = record(m.info);
+              const parts = Array.isArray(m.parts) ? m.parts : [];
+              return {
+                id: text(info.messageId, "message"),
+                role: info.role === "assistant" ? "assistant" : "user",
+                text: parts
+                  .map((part) => text(record(part).text))
+                  .filter(Boolean)
+                  .join("\n")
+                  .slice(0, 64 * 1024),
+              };
+            });
+          return {
+            ok: true as const,
+            result: {
+              view: "messages",
+              session: record(input.session),
+              messages,
+            },
+          };
+        } catch {
+          return deny("The session transcript could not be read.");
+        }
+      }
+      return {
+        ok: true as const,
+        result: {
+          view: "summary" as const,
+          summary: {
+            session: {
+              kind: "app" as const,
+              workspacePath: sibling.cwd,
+              sessionId: sibling.providerThreadId,
+            },
+            title: sibling.threadId,
+            status: sibling.timeline ? ("running" as const) : ("idle" as const),
+            availableActions: ["readSession" as const],
+          },
+        },
+      };
+    }
+    return deny(
+      "This bb host only supports listing and reading sessions; creating, forking, sending, waiting, interrupting, renaming, opening, archiving and pinning are not available.",
+    );
+  }
+
   async function reverseRequest(
     session: Session | undefined,
     method: string,
@@ -1044,6 +1193,8 @@ export function createBridge(
   ): Promise<unknown> {
     if (method === "session/requestRuntimePreferences")
       return context?.preferences ?? RUNTIME_PREFERENCES;
+    if (method.startsWith("appControl/"))
+      return appControl(session, method, raw, context);
     if (method === "subagents/readRuntimeConfig") {
       // Native asks during session/create, before its generated identity is
       // returned. Each supervised child owns exactly one session: bind its

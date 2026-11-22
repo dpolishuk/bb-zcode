@@ -112,6 +112,13 @@ export default async function plugin(bb: BbPluginApi) {
         "Let ZCode sessions author and run dynamic workflows (CreateWorkflow multi-agent orchestration). Workflow subagents run in the background of this bb and consume plan quota. Applies to new sessions.",
       default: false,
     },
+    appControlEnabled: {
+      type: "boolean",
+      label: "ZCode session-control tools",
+      description:
+        "Let a ZCode session discover and read the other live ZCode sessions of this bb through the native App-control tools (list and read only; creating, forking, sending, renaming, archiving, pinning, opening, waiting and interrupting are rejected). Sessions in other bb threads become readable by any session started with this setting on. Applies to new sessions.",
+      default: false,
+    },
   });
   let registered: ReturnType<BbPluginApi["providers"]["register"]> | undefined;
   // Launch options captured for the sessionless run-history reader (the
@@ -133,6 +140,7 @@ export default async function plugin(bb: BbPluginApi) {
     automationsEnabled: boolean;
     offPeakTasksEnabled: boolean;
     dynamicWorkflowsEnabled: boolean;
+    appControlEnabled: boolean;
   }) {
     const args = z.array(z.string()).parse(JSON.parse(values.args));
     launchOptions = {
@@ -152,6 +160,7 @@ export default async function plugin(bb: BbPluginApi) {
       automationsEnabled: values.automationsEnabled,
       offPeakTasksEnabled: values.offPeakTasksEnabled,
       dynamicWorkflowsEnabled: values.dynamicWorkflowsEnabled,
+      appControlEnabled: values.appControlEnabled,
     };
     registered?.dispose();
     registered = bb.providers.register({
