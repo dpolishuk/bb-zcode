@@ -212,7 +212,13 @@ sign-in), smoke the workflow journal against the WebSearch-budget driver,
 and refresh the pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
-## Stage 11 — context composition to the rich context snapshot (next)
+## Stage 11 — context composition to the rich context snapshot — done 2026-11-22
+
+Implementation notes: the snapshot reports against the bridge-supplied
+window (the selected reporting budget), recomputes its free bucket from
+it, and the composition query is read-only so a timeout drops only the
+snapshot. The fixture covers both CLI generations; the local Desktop was
+still 3.17.2, so the live happy path on 3.18.x is pending the app update.
 
 ## Stage 12 — appControl investigation (decision required)
 

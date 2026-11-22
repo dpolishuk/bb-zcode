@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Show what fills the context window: after a turn settles, the bridge asks
+  the CLI's context-composition query (CLI >= 3.18; older CLIs answer
+  method-not-found and keep the plain meter) and attaches a rich snapshot to
+  the contextWindow delta - native categories mapped onto bb's
+  used/reserved/deferred kinds with per-entry token counts, a free bucket
+  recomputed against the selected reporting window, the model, and the
+  ring-aligned used totals. The query is read-only and bounded (2 s) so a
+  slow read drops only the snapshot, and a per-session revision guard drops
+  measurements that raced a newer settle.
 - Verify the November upstream surface (v3.17.2-v3.18.2): the new
   credential-cipher reverse request and the plugins-degraded notification
   degrade cleanly - the bridge answers the unknown request with a typed

@@ -54,7 +54,7 @@ import {
   type AccountHost,
   type UsageWindow,
 } from "./coding-plan.js";
-import { Usage, rateLimitFailure } from "./usage.js";
+import { Usage, contextSnapshot, rateLimitFailure } from "./usage.js";
 import { nativeInput } from "./input.js";
 import { runtimeSettings } from "./settings.js";
 import { skillCatalog } from "./skills.js";
@@ -119,6 +119,8 @@ type Session = {
   snapshot: Snapshot;
   usage: Usage;
   activeTurnId?: string;
+  /** Last emitted context-composition revision (stale reads are dropped). */
+  compositionSeq: number;
   /** Last accepted bb selection; budgets also apply to native-origin turns. */
   contextModel?: { providerId: string; modelId: string };
   history: History;
@@ -775,12 +777,44 @@ export function createBridge(
           session.snapshot = snapshot;
           session.background.update(snapshot.projection);
           maybeReleaseOwned(session);
+          const size = modelContextWindow(snapshot, session.contextModel);
+          let composition: ReturnType<typeof contextSnapshot> | undefined;
+          try {
+            // Rich per-category context breakdown (CLI >= 3.18); older CLIs
+            // answer method-not-found and keep the plain context meter. The
+            // revision guard drops a measurement that raced a newer settle.
+            const measured = record(
+              record(
+                await session.client.request(
+                  "v4/conversation/contextComposition",
+                  { sessionId: session.providerThreadId },
+                  2000,
+                  // A slow optional read must only drop the snapshot, never
+                  // fail the shared child process.
+                  true,
+                ),
+              ).composition,
+            );
+            const revision = measured.revision;
+            if (
+              typeof revision !== "number" ||
+              revision > session.compositionSeq
+            ) {
+              if (typeof revision === "number")
+                session.compositionSeq = revision;
+              composition = contextSnapshot(measured, {
+                size:
+                  size ?? (typeof projected === "number" ? projected : null),
+                sessionId: session.providerThreadId,
+                turnId: session.activeTurnId ?? null,
+              });
+            }
+          } catch {
+            /* Composition is optional; the plain meter still flows. */
+          }
           emit(
             session,
-            session.usage.context(
-              snapshot.projection,
-              modelContextWindow(snapshot, session.contextModel),
-            ),
+            session.usage.context(snapshot.projection, size, composition),
           );
         }
       } catch {
@@ -1938,6 +1972,7 @@ export function createBridge(
         buffered: [],
         stopping: false,
         lastSeq: -1,
+        compositionSeq: 0,
         snapshot,
         usage: new Usage(restoredUsage),
         contextModel:
