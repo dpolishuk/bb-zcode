@@ -1,5 +1,19 @@
 # Knowledge log
 
+## 2026-11-22 (November upstream plan)
+
+- **Researched** upstream v3.17.2–v3.18.2 (syncs `a9fe401`..`fec9759`):
+  five new protocol methods, App Session Control behind
+  `appControlEnabled`, per-ask WebSearch budget, and
+  `v4/conversation/contextComposition` (revision-guarded, existing-only).
+  Wire-compatible with the current bridge (create/resume/preferences and
+  v4 commands unchanged; CLI still 0.17.1). Wrote the support plan as
+  roadmap stages 10-12: verification pass, context-composition mapping to
+  the rich context snapshot (native 11 fine categories -> bb's
+  used/reserved/deferred kinds), and a parked appControl decision; the
+  App-facing plugin queries stay out of scope. Plan in
+  [feature roadmap](decisions/feature-roadmap.md).
+
 ## 2026-11-14 (interaction re-announce dedupe)
 
 - **Fixed** unanswered questions stacking duplicate rows in bb threads. The

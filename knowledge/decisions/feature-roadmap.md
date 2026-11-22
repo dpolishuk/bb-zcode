@@ -190,6 +190,74 @@ schema-validated but not yet eyeballed in an installed bb run, and
 `threadPanelAction` is retired in newer SDK typings (migration needs an SDK
 bump).
 
+## Stage 10 — November upstream verification (v3.17.2–v3.18.2)
+
+Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
+methods (`plugins/readUserOptions`, `plugins/mentionItems`,
+`session/releaseUnderDirectory`, the `startup/pluginsDegraded` notification,
+`interaction/requestCredentialCipher`), an App Session Control surface
+gated on `appControlEnabled` in runtime preferences, a per-ask WebSearch
+budget for dynamic workflows, and a `v4/conversation/contextComposition`
+read (revision-guarded, existing-only). v4 commands, create/resume, and
+preference schemas are unchanged - the current bridge is wire-compatible.
+
+Deliverables: re-run the live suite on an updated Desktop bundle (3.18.x;
+the local machine was on 3.17.2 at research time), fixture-check that the
+unknown reverse request and notification degrade cleanly (they are off the
+critical path: cipher serves interactive CLI login, we use Desktop
+sign-in), smoke the workflow journal against the WebSearch-budget driver,
+and refresh the pins in
+[protocol contracts](../contracts/protocol-contracts.md) and the audit.
+
+## Stage 11 — context composition to the rich context snapshot
+
+The audit's long-standing "contextWindow delta accepts a rich snapshot the
+plugin does not send" gap. Query
+`v4/conversation/contextComposition` (same v4 read lane as `rowsRange`;
+method-not-found on older CLIs degrades to today's plain delta) after a
+turn settles and map it into the delta's `snapshot`:
+
+- native items (`name` <=200 chars, <=50 per category) become entries
+  `{id, label, tokens}`;
+- native fine categories (11 ids: `system_prompt`, `meta_user_context`,
+  `skills`, `tool_prompt`, `system_tool_schemas`, `mcp_tool_schemas`,
+  `app_tool_schemas`, `deferred_tool_schemas`, `reminders`,
+  `compact_summary`, `messages`) map to bb's four snapshot kinds:
+  conversation content (`messages`, `compact_summary`, `reminders`,
+  `meta_user_context`) to `used`, static overhead (`system_prompt`,
+  `tool_prompt`, `skills`, loaded tool schemas) to `reserved`,
+  `deferred_tool_schemas` to `deferred`; `free` stays computed from
+  `contextWindowTokens - usedTokens`;
+- `usedTokens`/`contextWindowTokens` from the projection read that already
+  happens in `finishTurn`; `autoCompactAtTokens` from native metadata when
+  exposed, else `null`; `capturedAt`/`estimated`/`model`/
+  `providerSessionId`/`providerTurnId` filled by the bridge;
+- revision guard: the query result carries a revision; a stale read (turn
+  settled again meanwhile) is dropped, not emitted.
+
+Push variant (optional follow-up): subscribe to the
+`contextCompositionChanged` notification for live updates between turns on
+supported CLIs.
+
+## Stage 12 — appControl investigation (decision required)
+
+`appControlEnabled: true` in runtime preferences injects twelve
+session-control tools whose reverse RPCs the host must answer - upstream
+built it for the Desktop App to list/read/drive local CLI sessions. In bb
+this overlaps bb's own thread tools and widens the agent's reach across
+sessions, so it needs an explicit maintainer decision (same posture as the
+self-hosted browser provider in stage 5) before any implementation. Park
+until stage 11 lands.
+
+## Out of scope additions (November surface)
+
+`plugins/readUserOptions` and `plugins/mentionItems` serve the Desktop
+App's plugin-settings UI and composer `@` panel - bb has no equivalent
+surfaces. `interaction/requestCredentialCipher` serves interactive CLI
+login; the plugin authenticates through Desktop sign-in.
+`session/releaseUnderDirectory` adds nothing over process-death cleanup in
+our one-child-per-thread model.
+
 ## Out of scope for this plugin
 
 Start/Team/Highspeed plans (need real accounts to verify), full subagent
