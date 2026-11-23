@@ -81,6 +81,12 @@ path verified `GLM Coding Max` with native `GLM-5.3` and `GLM-5.3-Flash`. The
 key is read from macOS Keychain into memory and is never logged or copied into
 plugin settings.
 
+A further catalog check found GLM-5.4 only in Desktop's downloaded runtime
+catalog (revision 48), not the app-bundled JSON. Launch resolution now selects
+that runtime catalog and carries its app version explicitly. The real native
+snapshot reports GLM-5.4 as current, with GLM-5.3 and GLM-5.3-Flash also
+available; no model ID was added by the plugin.
+
 ## Versions and contracts
 
 | Component                           | Verified version          |

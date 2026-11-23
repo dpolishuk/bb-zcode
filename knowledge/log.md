@@ -1,5 +1,15 @@
 # Knowledge log
 
+## 2026-11-23 (Desktop 4.0 runtime model catalog)
+
+- **Fixed** remotely enabled models missing from bb. Desktop showed GLM-5.4
+  from runtime catalog revision 48 while the plugin forced the older app-bundled
+  JSON, whose account allowlist contained only GLM-5.3 variants. Launch
+  resolution now selects the native version/platform/endpoint-scoped runtime
+  catalog and passes its app version to account setup. The launch regression
+  failed before the fix; the real native snapshot now selects GLM-5.4 and lists
+  GLM-5.3 and Flash without plugin-side model hardcodes.
+
 ## 2026-11-23 (Desktop 4.0 OS credential store)
 
 - **Fixed** empty bb model catalogs with a working Desktop 4.0 sign-in. Native

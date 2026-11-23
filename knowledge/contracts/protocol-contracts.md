@@ -136,7 +136,13 @@ getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
   fingerprint, and decrypts only in memory. Without this path Desktop shows
   models while the bb-launched CLI has an empty catalog and no plan binding.
   Keychain errors use sanitized account errors; secrets never enter logs or
-  plugin settings.
+  plugin settings. Launch resolution also prefers the downloaded runtime
+  catalog at `runtime/provider/<platform>/<app version>/endpoint-<sha256(origin)
+prefix>/zcode-builtin.json` over the app-bundled JSON when it exists. This
+  keeps the account overlay's `basedOnZCodeBuiltinRevision` identical to the
+  CLI's active catalog and exposes remotely enabled models such as GLM-5.4
+  without hardcoding them. The resolved app version is passed explicitly because
+  it can no longer be inferred from the catalog's relative path.
 
 ## Translation rules
 

@@ -1,4 +1,5 @@
-import { existsSync, accessSync, constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, accessSync, constants, readFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
@@ -32,6 +33,52 @@ function onPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
   }
 }
 
+function runtimeCatalog(executable: string, env: NodeJS.ProcessEnv) {
+  const bundle = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs";
+  let version = env.ZCODE_APP_VERSION?.trim();
+  if (!version && executable === bundle) {
+    try {
+      version = readFileSync(
+        "/Applications/ZCode.app/Contents/Info.plist",
+        "utf8",
+      ).match(
+        /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/,
+      )?.[1];
+    } catch {
+      return undefined;
+    }
+  }
+  if (!version) return undefined;
+  const platform = `${process.platform === "win32" ? "windows" : process.platform}-${
+    process.arch === "arm64"
+      ? "aarch64"
+      : process.arch === "x64"
+        ? "x86_64"
+        : process.arch
+  }`;
+  let origin: string;
+  try {
+    origin = new URL(
+      env.ZCODE_ENDPOINT_ORIGIN || env.ZCODE_BASE_URL || "https://zcode.z.ai",
+    ).origin;
+  } catch {
+    return undefined;
+  }
+  const endpoint = `endpoint-${createHash("sha256").update(origin).digest("hex").slice(0, 32)}`;
+  const catalog = join(
+    env.ZCODE_DATA_BASE_DIR || env.HOME || homedir(),
+    ".zcode",
+    "v2",
+    "runtime",
+    "provider",
+    platform,
+    version,
+    endpoint,
+    "zcode-builtin.json",
+  );
+  return existsSync(catalog) ? { path: catalog, version } : undefined;
+}
+
 export function resolveLaunch(
   raw: unknown = {},
   env: NodeJS.ProcessEnv = process.env,
@@ -56,8 +103,11 @@ export function resolveLaunch(
       dirname(executable),
       "../config/provider/zcode-builtin.json",
     );
-    if (existsSync(config) && !childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) {
-      childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config;
+    if (!childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) {
+      const runtime = runtimeCatalog(executable, childEnv);
+      childEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE =
+        runtime?.path ?? (existsSync(config) ? config : undefined);
+      if (runtime) childEnv.ZCODE_APP_VERSION ||= runtime.version;
     }
   }
   const desktopCatalog =

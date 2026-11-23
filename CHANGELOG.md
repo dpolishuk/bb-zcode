@@ -10,6 +10,10 @@
   plugin now decrypts `enc:v2:os` credentials in memory through the macOS
   Keychain, so Desktop sign-in works in bb without copying credentials into
   plugin settings or logs.
+- Follow ZCode Desktop's downloaded runtime provider catalog instead of pinning
+  the older JSON bundled inside the app. Account overlays and CLI sessions now
+  share the same revision, so newly enabled models such as GLM-5.4 appear in bb
+  without a plugin hardcode or app update.
 
 ## 0.17.0 — 2026-11-22
 

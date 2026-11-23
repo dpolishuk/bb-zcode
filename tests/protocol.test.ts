@@ -1,4 +1,7 @@
 import { expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { experimental_scanPublicSdkOnly } from "@get-bb/plugin-sdk/testing";
 import {
   baseModelId,
@@ -210,6 +213,39 @@ it("only imports public SDK surfaces and declared dependencies", async () => {
   });
   expect(scan.violations).toEqual([]);
   expect(scan.privateDependencies).toEqual([]);
+});
+
+it("uses ZCode's downloaded runtime catalog when it is newer than the bundled catalog", () => {
+  const root = mkdtempSync(join(tmpdir(), "bb-zcode-runtime-catalog-"));
+  const platform = `${process.platform === "win32" ? "windows" : process.platform}-${
+    process.arch === "arm64"
+      ? "aarch64"
+      : process.arch === "x64"
+        ? "x86_64"
+        : process.arch
+  }`;
+  const directory = join(
+    root,
+    ".zcode",
+    "v2",
+    "runtime",
+    "provider",
+    platform,
+    "4.0.0",
+    "endpoint-78d7c3bef4024722642626fe3669a799",
+  );
+  mkdirSync(directory, { recursive: true });
+  const catalog = join(directory, "zcode-builtin.json");
+  writeFileSync(catalog, "{}");
+  const launch = resolveLaunch(
+    { executable: "/custom/zcode.cjs" },
+    {
+      HOME: root,
+      ZCODE_APP_VERSION: "4.0.0",
+      ZCODE_ENDPOINT_ORIGIN: "https://zcode.z.ai",
+    },
+  );
+  expect(launch.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE).toBe(catalog);
 });
 
 it("pins both provider paths so account overlays use the CLI's builtin revision", () => {
