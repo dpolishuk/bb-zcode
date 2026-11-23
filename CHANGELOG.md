@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.1 — 2026-11-23
 
 - Keep existing threads usable after ZCode Desktop 4.0 removes their saved
   model from the native catalog. The bridge now falls back to ZCode's current
