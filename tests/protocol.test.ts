@@ -169,10 +169,15 @@ it("resolves budget aliases within the selected provider", () => {
   expect(modelForTurn(catalog, "two/model-256k")?.modelId).toBe("model-256k");
 });
 
-it("preserves unknown suffix-shaped IDs rather than guessing their base", () => {
-  expect(modelForTurn(snapshot, "api/unknown-256k")?.modelId).toBe(
-    "unknown-256k",
-  );
+it("falls back to the current model when a saved ID left the native catalog", () => {
+  expect(
+    modelForTurn(snapshot, "account:zai-individual-coding-plan/GLM-5.3"),
+  ).toEqual({
+    providerId: "api",
+    modelId: "model",
+    options: { reasoningLevel: "disabled" },
+  });
+  expect(modelForTurn(snapshot, "api/unknown-256k")?.modelId).toBe("model");
 });
 
 it("passes executable arguments as an argv array without a shell", () => {

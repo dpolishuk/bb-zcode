@@ -1,5 +1,20 @@
 # Knowledge log
 
+## 2026-11-23 (Desktop 4.0 stale model compatibility)
+
+- **Fixed** saved model selections that disappeared from the native catalog in
+  Desktop 4.0.0 / CLI 0.18.0. The real failure was
+  `Provider Registry 中不存在 Model: account:zai-individual-coding-plan/GLM-5.3`.
+  `selectionForTurn` now falls back to the snapshot's current model only when
+  the requested native identity or budget alias is absent; prompt dispatch and
+  context reporting share the result. Regression tests failed on the stale ID
+  before the fix and pass afterward, alongside valid explicit/alias coverage.
+- **Verified** the installed 4.0.0 / 0.18.0 bundle with `npm run test:live`:
+  `RUNTIME_VERIFIED`, protocol version 1, 27 loopback model requests and the
+  existing resume/background/Coding Plan/extension checks. This closes the
+  pending live passes in roadmap stages 10 and 11; paid production inference
+  was not rerun.
+
 ## 2026-11-22 (appControl read-only)
 
 - **Implemented** roadmap stage 12 as a read-only, off-by-default subset:

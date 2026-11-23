@@ -190,10 +190,12 @@ schema-validated but not yet eyeballed in an installed bb run, and
 `threadPanelAction` is retired in newer SDK typings (migration needs an SDK
 bump).
 
-## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — fixtures done 2026-11-22, live pass pending
+## Stage 10 — November upstream verification (v3.17.2–v3.18.2) — done 2026-11-23
 
-Fixture-level degradation coverage is done; the live suite on Desktop
-3.18.x remains and lands when the local app updates.
+Fixture-level degradation coverage is done, and the live suite passed on
+Desktop 4.0.0 / CLI 0.18.0. The upgrade also exposed stale saved model IDs;
+the bridge now falls back to the current catalog entry instead of forwarding
+a removed provider/model identity.
 
 Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
 methods (`plugins/readUserOptions`, `plugins/mentionItems`,
@@ -204,12 +206,11 @@ budget for dynamic workflows, and a `v4/conversation/contextComposition`
 read (revision-guarded, existing-only). v4 commands, create/resume, and
 preference schemas are unchanged - the current bridge is wire-compatible.
 
-Deliverables: re-run the live suite on an updated Desktop bundle (3.18.x;
-the local machine was on 3.17.2 at research time), fixture-check that the
+Completed deliverables: re-ran the live suite on an updated Desktop bundle,
+fixture-checked that the
 unknown reverse request and notification degrade cleanly (they are off the
 critical path: cipher serves interactive CLI login, we use Desktop
-sign-in), smoke the workflow journal against the WebSearch-budget driver,
-and refresh the pins in
+sign-in), and refreshed the pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
 ## Stage 11 — context composition to the rich context snapshot — done 2026-11-22
@@ -217,8 +218,8 @@ and refresh the pins in
 Implementation notes: the snapshot reports against the bridge-supplied
 window (the selected reporting budget), recomputes its free bucket from
 it, and the composition query is read-only so a timeout drops only the
-snapshot. The fixture covers both CLI generations; the local Desktop was
-still 3.17.2, so the live happy path on 3.18.x is pending the app update.
+snapshot. The fixture covers both CLI generations, and the live happy path
+passed on Desktop 4.0.0 / CLI 0.18.0.
 
 ## Stage 12 — appControl read-only discovery — done 2026-11-22
 

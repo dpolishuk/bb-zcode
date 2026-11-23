@@ -61,13 +61,25 @@ regressions for this behavior. A new or resumed session refreshes discovery.
 These are reporting caps; native inference and compaction retain their own
 window. Paid production inference and Linux/Windows remain **UNVERIFIED**.
 
+## Compatibility re-check: ZCode Desktop 4.0 (2026-11-23)
+
+Desktop 4.0.0 bundles CLI `0.18.0`. A real thread retained the removed
+`account:zai-individual-coding-plan/GLM-5.3` selection and failed before native
+inference with `Provider Registry 中不存在 Model`. Focused regressions now prove
+that an absent saved selection falls back to the snapshot's current native
+model, while valid explicit and context-budget selections retain their IDs.
+`npm run test:live` reported `RUNTIME_VERIFIED` against the installed 4.0.0 /
+0.18.0 bundle, protocol version 1, 27 synthetic model requests and the existing
+bridge, resume, background, Coding Plan and extension checks. This is loopback
+verification; a new paid production-inference request was not performed.
+
 ## Versions and contracts
 
 | Component                           | Verified version          |
 | ----------------------------------- | ------------------------- |
 | bb desktop / bundled plugin builder | 0.46.1                    |
 | Published `@get-bb/plugin-sdk`      | 0.6.49                    |
-| Installed ZCode CLI                 | 0.16.9; 0.17.0 re-checked |
+| Installed ZCode CLI                 | 0.18.0 (Desktop 4.0.0)    |
 | ZCode protocol reported by the CLI  | ZCode Protocol, version 1 |
 | bb bridge / deltas                  | Protocol 2 / grammar 3    |
 | Node used for the full bb smoke     | 26.5.0                    |

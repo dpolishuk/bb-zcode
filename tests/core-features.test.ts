@@ -501,6 +501,11 @@ it("classifies a personal-provider rate limit without Coding Plan windows", asyn
       return [{ label: "5-hour window", usedPercent: 100, resetsAt }];
     },
   });
+  h.snapshot.settings.model.available.push({
+    ref: { providerId: "personal", modelId: "other" },
+    label: "Personal model",
+    contextWindow: 200000,
+  });
   await h.start();
   await h.rpc("turn/start", {
     threadId: "thread",
@@ -1464,6 +1469,28 @@ it.each([
     ).toEqual({ providerId: "test", modelId: "model" });
   },
 );
+
+it("uses the current native model when a saved selection disappeared in ZCode 4.0", async () => {
+  const h = harness();
+  const staleOptions = {
+    ...options,
+    model: "account:zai-individual-coding-plan/GLM-5.3",
+  };
+  await h.start({ options: staleOptions });
+  expect(
+    (
+      await h.rpc("turn/start", {
+        ...h.base,
+        options: staleOptions,
+        input: h.input("hello"),
+        clientRequestId: "creq_abcdefghik",
+      })
+    ).error,
+  ).toBeUndefined();
+  expect(
+    h.calls.find((c) => c.method === "session/send")?.params.modelSelection,
+  ).toEqual({ providerId: "test", modelId: "model" });
+});
 
 it("connectivity checks preserve native suffix IDs and resolve only catalog aliases", async () => {
   const h = harness();

@@ -46,11 +46,11 @@ the sources when `stale_after` passes or an upstream release lands.
 
 ## Contract parties
 
-| Boundary            | Contract                                          | Verified baseline                                           | Upstream source                                                                                   |
-| ------------------- | ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| bb ↔ plugin         | Provider bridge protocol 2, delta grammar 3 (SDK) | SDK `@get-bb/plugin-sdk` 0.6.49                             | [bb @ 9937c46](https://github.com/get-bb/bb/tree/9937c46f5c7e369de3563eb864c8cbc4c3b9c231)        |
-| plugin ↔ ZCode CLI  | "ZCode Protocol" version 1 over stdio JSON lines  | CLI 0.17.1 (app 3.17.1), macOS; 0.16.9 in the v0.5.0 record | [ZCode @ 0a1fc56](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411) |
-| marketplace catalog | bb marketplace schema v2 (generated)              | `marketplace.json` at repo HEAD                             | [docs/marketplace.md](../../docs/marketplace.md)                                                  |
+| Boundary            | Contract                                          | Verified baseline                                          | Upstream source                                                                                   |
+| ------------------- | ------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| bb ↔ plugin         | Provider bridge protocol 2, delta grammar 3 (SDK) | SDK `@get-bb/plugin-sdk` 0.6.49                            | [bb @ 9937c46](https://github.com/get-bb/bb/tree/9937c46f5c7e369de3563eb864c8cbc4c3b9c231)        |
+| plugin ↔ ZCode CLI  | "ZCode Protocol" version 1 over stdio JSON lines  | CLI 0.18.0 (app 4.0.0), macOS; 0.16.9 in the v0.5.0 record | [ZCode @ 0a1fc56](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411) |
+| marketplace catalog | bb marketplace schema v2 (generated)              | `marketplace.json` at repo HEAD                            | [docs/marketplace.md](../../docs/marketplace.md)                                                  |
 
 Engine ranges (`package.json`): Node `>=22` (24+ recommended for use), bb
 `>=0.46`, SDK `>=0.6.49 <0.7`. The runtime baseline above comes from
@@ -120,6 +120,15 @@ getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
   is still requested on the optional best-effort resume path (usage
   restore in `src/bridge.ts`, failure-tolerant) and remains served in
   0.17.1.
+- **Re-verification 2026-11-23**: Desktop 4.0.0 bundles CLI **0.18.0** and
+  still negotiates protocol version 1. The isolated real-CLI smoke passed.
+  Its catalog no longer contained the previously saved
+  `account:zai-individual-coding-plan/GLM-5.3`; forwarding that stale identity
+  fails in the native provider registry. `selectionForTurn` therefore accepts
+  only a requested identity (or budget alias) present in the current snapshot
+  and otherwise uses the snapshot's current model. Prompt dispatch and context
+  reporting share this resolver, so they cannot select different fallback
+  identities. Valid explicit selections and aliases are unchanged.
 
 ## Translation rules
 

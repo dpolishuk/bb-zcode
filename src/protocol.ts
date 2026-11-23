@@ -52,12 +52,28 @@ export const snapshotSchema = z
   .passthrough();
 export type Snapshot = z.infer<typeof snapshotSchema>;
 
+export function selectionForTurn(
+  snapshot: Snapshot,
+  model: string | undefined,
+) {
+  const requested = selectedModel(model);
+  if (!requested) return snapshot.settings.model.current;
+  const nativeModelId = baseModelId(snapshot, requested);
+  return snapshot.settings.model.available.some(
+    (entry) =>
+      entry.ref.providerId === requested.providerId &&
+      entry.ref.modelId === nativeModelId,
+  )
+    ? requested
+    : snapshot.settings.model.current;
+}
+
 export function modelForTurn(
   snapshot: Snapshot,
   model: string | undefined,
   reasoning?: string,
 ) {
-  const selection = selectedModel(model) ?? snapshot.settings.model.current;
+  const selection = selectionForTurn(snapshot, model);
   if (!selection) return undefined;
   // Only catalog budget aliases resolve to a base native model.
   const nativeModelId = baseModelId(snapshot, selection);

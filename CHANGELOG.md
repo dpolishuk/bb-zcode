@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Keep existing threads usable after ZCode Desktop 4.0 removes their saved
+  model from the native catalog. The bridge now falls back to ZCode's current
+  model instead of forwarding the stale provider/model ID; valid explicit
+  selections and context-budget aliases are unchanged.
+
 ## 0.17.0 — 2026-11-22
 
 - Add opt-in ZCode session-control tools (roadmap stage 12): with the new

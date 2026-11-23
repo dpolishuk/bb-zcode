@@ -46,6 +46,7 @@ import {
   baseModelId,
   contextBudgetVariants,
   selectedModel,
+  selectionForTurn,
   type Snapshot,
 } from "./protocol.js";
 import { Timeline, toolPresentation } from "./timeline.js";
@@ -2338,8 +2339,7 @@ export function createBridge(
       );
       // Keep the last accepted bb selection across native background turns.
       // Only modelSelection crosses the native boundary, with its real ID.
-      const rawSelection =
-        selectedModel(options.model) ?? session.snapshot.settings.model.current;
+      const rawSelection = selectionForTurn(session.snapshot, options.model);
       if (
         session.accountError &&
         modelSelection?.providerId.startsWith("account:")
