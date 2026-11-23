@@ -6,6 +6,10 @@
   model from the native catalog. The bridge now falls back to ZCode's current
   model instead of forwarding the stale provider/model ID; valid explicit
   selections and context-budget aliases are unchanged.
+- Restore Coding Plan models with ZCode 4.0's OS-backed credential store. The
+  plugin now decrypts `enc:v2:os` credentials in memory through the macOS
+  Keychain, so Desktop sign-in works in bb without copying credentials into
+  plugin settings or logs.
 
 ## 0.17.0 — 2026-11-22
 

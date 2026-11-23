@@ -8,7 +8,10 @@ import { record } from "../src/protocol.js";
 
 const hosts: CodingPlanHost[] = [];
 afterEach(() => hosts.splice(0).forEach((host) => host.close()));
-function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
+function fixture(
+  family: "zai" | "bigmodel" = "zai",
+  encrypted: boolean | "os" = false,
+) {
   const root = mkdtempSync(join(tmpdir(), "bb-zcode-account-"));
   const data = join(root, ".zcode", "v2");
   mkdirSync(data, { recursive: true });
@@ -39,15 +42,22 @@ function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
       id: "private-user-canary",
     }),
   };
+  const osKey = randomBytes(32);
   const encrypt = (value: string) => {
     const iv = randomBytes(12);
     const cipher = createCipheriv(
       "aes-256-gcm",
-      createHash("sha256").update("test-secret").digest(),
+      encrypted === "os"
+        ? osKey
+        : createHash("sha256").update("test-secret").digest(),
       iv,
     );
     const data = Buffer.concat([cipher.update(value), cipher.final()]);
-    return `enc:v1:${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${data.toString("base64url")}`;
+    const prefix =
+      encrypted === "os"
+        ? `enc:v2:os:${createHash("sha256").update(osKey).digest("hex").slice(0, 24)}:`
+        : "enc:v1:";
+    return `${prefix}${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${data.toString("base64url")}`;
   };
   const save = () =>
     writeFileSync(
@@ -138,6 +148,7 @@ function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
       return Response.json({ code: 200, data: result });
     },
   );
+  const readOsSecret = vi.fn(async () => osKey.toString("base64url"));
   const host = new CodingPlanHost(
     {
       command: "unused",
@@ -149,7 +160,11 @@ function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtin,
       },
     },
-    { fetch: fetcher as typeof fetch, now: () => now },
+    {
+      fetch: fetcher as typeof fetch,
+      now: () => now,
+      readOsSecret,
+    },
   );
   hosts.push(host);
   const client = { request: vi.fn(async () => ({})), close: async () => {} };
@@ -166,6 +181,7 @@ function fixture(family: "zai" | "bigmodel" = "zai", encrypted = false) {
     fetcher,
     data,
     credentials,
+    readOsSecret,
     save,
     providerId,
     builtin,
@@ -209,6 +225,15 @@ it.each(["zai", "bigmodel"] as const)(
     ).toBe("private-project-canary-2");
   },
 );
+
+it("loads ZCode 4.0 Coding Plan credentials backed by the OS keychain", async () => {
+  const f = fixture("zai", "os");
+  await f.host.initialize(f.client);
+  expect(f.readOsSecret).toHaveBeenCalledWith(join(f.data, "credentials.json"));
+  expect(f.host.planLabel).toBe("GLM Coding Plan");
+  expect(f.host.planProviderId).toBe(f.providerId);
+  expect(f.client.request).toHaveBeenCalledOnce();
+});
 
 it.each(["session", "provider", "model", "scope", "mode", "unscoped-retry"])(
   "denies mismatched %s without releasing credentials",

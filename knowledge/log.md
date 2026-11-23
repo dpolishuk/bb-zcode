@@ -1,5 +1,18 @@
 # Knowledge log
 
+## 2026-11-23 (Desktop 4.0 OS credential store)
+
+- **Fixed** empty bb model catalogs with a working Desktop 4.0 sign-in. Native
+  `credential-source` is now `os` and saved values use `enc:v2:os`; the old
+  reader only understood `enc:v1`. `CodingPlanHost` now reads the native macOS
+  Keychain entry, validates its fingerprint and decrypts values in memory with
+  sanitized failures. The regression failed before implementation and passes
+  with the synthetic v2 payload.
+- **Verified** the real MacBook account path after reconnecting Coding Plan:
+  `GLM Coding Max`, `GLM-5.3` and `GLM-5.3-Flash` appear in the native snapshot.
+  The full suite (303 tests), typecheck, build and real-CLI loopback smoke pass.
+  Updated configuration, validation, protocol and roadmap records.
+
 ## 2026-11-23 (Desktop 4.0 stale model compatibility)
 
 - **Fixed** saved model selections that disappeared from the native catalog in

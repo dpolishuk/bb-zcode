@@ -177,8 +177,10 @@ Model names and efforts come from the installed catalog; no effort options
 are invented by the plugin.
 
 The plugin reads `~/.zcode/v2/credentials.json` and `setting.json`, including
-ZCode's encrypted credential format. It exchanges the existing desktop login
-for short-lived project tokens using fixed official account endpoints, checks
+ZCode's legacy encrypted format and 4.0's `enc:v2:os` format. For the latter on
+macOS it reads the `ZCode Credential Encryption` key from the login Keychain;
+allow the bb/Node process access if macOS prompts. It exchanges the existing
+desktop login for short-lived project tokens using fixed official account endpoints, checks
 the subscription, and holds those tokens only in memory. It does not create
 API keys or modify desktop credentials. Raw child-protocol recording is disabled
 because authentication replies contain credentials. Signing out or switching

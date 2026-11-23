@@ -195,7 +195,10 @@ bump).
 Fixture-level degradation coverage is done, and the live suite passed on
 Desktop 4.0.0 / CLI 0.18.0. The upgrade also exposed stale saved model IDs;
 the bridge now falls back to the current catalog entry instead of forwarding
-a removed provider/model identity.
+a removed provider/model identity. Its OS-backed credential migration also
+required native macOS Keychain decryption in `CodingPlanHost`; the old
+legacy-file-only reader produced an empty model catalog despite a working
+Desktop sign-in.
 
 Upstream syncs `a9fe401`..`fec9759` (2026-11-03..13) add five protocol
 methods (`plugins/readUserOptions`, `plugins/mentionItems`,
@@ -208,9 +211,8 @@ preference schemas are unchanged - the current bridge is wire-compatible.
 
 Completed deliverables: re-ran the live suite on an updated Desktop bundle,
 fixture-checked that the
-unknown reverse request and notification degrade cleanly (they are off the
-critical path: cipher serves interactive CLI login, we use Desktop
-sign-in), and refreshed the pins in
+unknown reverse request and notification degrade cleanly, and refreshed the
+pins in
 [protocol contracts](../contracts/protocol-contracts.md) and the audit.
 
 ## Stage 11 — context composition to the rich context snapshot — done 2026-11-22

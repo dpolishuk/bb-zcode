@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createDecipheriv, createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir, platform, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { z } from "zod";
 import type { ZCodeConnection } from "./client.js";
 import { workspaceRef, type LaunchSpec } from "./launch.js";
@@ -50,6 +52,33 @@ async function readObject(path: string, optional = false) {
     if (optional && record(error).code === "ENOENT") return {};
     throw failure(
       "cannot read the desktop configuration. Open ZCode and sign in again.",
+    );
+  }
+}
+
+async function readOsCredentialSecret(credentialsPath: string) {
+  if (platform() !== "darwin")
+    throw failure("OS-backed desktop sign-in is only supported on macOS.");
+  const account = createHash("sha256")
+    .update(resolve(credentialsPath))
+    .digest("hex");
+  try {
+    const { stdout } = await promisify(execFile)(
+      "security",
+      [
+        "find-generic-password",
+        "-s",
+        "ZCode Credential Encryption",
+        "-a",
+        account,
+        "-w",
+      ],
+      { timeout: 10_000, maxBuffer: 4096 },
+    );
+    return stdout.trim();
+  } catch {
+    throw failure(
+      "cannot read desktop sign-in from the OS credential store. Unlock it and reconnect Coding Plan in ZCode.",
     );
   }
 }
@@ -142,10 +171,15 @@ export class CodingPlanHost implements AccountHost {
   private readonly root: string;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
+  private readonly readOsSecret: typeof readOsCredentialSecret;
 
   constructor(
     private launch: LaunchSpec,
-    dependencies: { fetch?: typeof fetch; now?: () => number } = {},
+    dependencies: {
+      fetch?: typeof fetch;
+      now?: () => number;
+      readOsSecret?: typeof readOsCredentialSecret;
+    } = {},
   ) {
     this.root = join(
       launch.env.ZCODE_DATA_BASE_DIR || launch.env.HOME || homedir(),
@@ -154,12 +188,44 @@ export class CodingPlanHost implements AccountHost {
     );
     this.fetcher = dependencies.fetch ?? fetch;
     this.now = dependencies.now ?? Date.now;
+    this.readOsSecret = dependencies.readOsSecret ?? readOsCredentialSecret;
   }
 
   private async readLogin(): Promise<Login | undefined> {
-    const store = await readObject(join(this.root, "credentials.json"), true);
-    const get = (key: string) => {
+    const credentialsPath = join(this.root, "credentials.json");
+    const store = await readObject(credentialsPath, true);
+    const get = async (key: string) => {
       const value = text(store[key]);
+      if (value.startsWith("enc:v2:os:")) {
+        try {
+          const [fingerprint, payload] = value.slice(10).split(":");
+          const secret = Buffer.from(
+            await this.readOsSecret(credentialsPath),
+            "base64url",
+          );
+          if (
+            secret.length !== 32 ||
+            createHash("sha256").update(secret).digest("hex").slice(0, 24) !==
+              fingerprint
+          )
+            throw new Error();
+          const [iv, tag, ciphertext] = payload
+            .split(".")
+            .map((part) => Buffer.from(part, "base64url"));
+          if (iv.length !== 12 || tag.length !== 16) throw new Error();
+          const decipher = createDecipheriv("aes-256-gcm", secret, iv);
+          decipher.setAuthTag(tag);
+          return Buffer.concat([
+            decipher.update(ciphertext),
+            decipher.final(),
+          ]).toString("utf8");
+        } catch (error) {
+          if (error instanceof AccountError) throw error;
+          throw failure(
+            "cannot decrypt desktop sign-in. Reconnect Coding Plan in ZCode.",
+          );
+        }
+      }
       if (!value.startsWith("enc:v1:")) return value;
       try {
         let username = "unknown";
@@ -193,20 +259,20 @@ export class CodingPlanHost implements AccountHost {
         );
       }
     };
-    const family = get("oauth:active_provider").trim();
+    const family = (await get("oauth:active_provider")).trim();
     if (family !== "zai" && family !== "bigmodel") return;
     const settings = await readObject(join(this.root, "setting.json"), true);
     const kind = record(
       record(settings.providerFamilyConnectionSelections)[family],
     ).kind;
     if (kind && kind !== "individual-coding-plan") return;
-    const token = get(`oauth:${family}:access_token`)
+    const token = (await get(`oauth:${family}:access_token`))
       .trim()
       .replace(/^Bearer\s+/i, "");
     if (!token) return;
     // Include the saved identity as well as the login generation in the binding.
-    const identity = get(`oauth:${family}:user_info`);
-    const zcodeJwt = get("zcodejwttoken")
+    const identity = await get(`oauth:${family}:user_info`);
+    const zcodeJwt = (await get("zcodejwttoken"))
       .trim()
       .replace(/^Bearer\s+/i, "");
     return {

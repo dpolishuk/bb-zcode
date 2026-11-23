@@ -128,7 +128,15 @@ getState,ensureReady,stop,restart}` — unused for now; they recover a faulted
   only a requested identity (or budget alias) present in the current snapshot
   and otherwise uses the snapshot's current model. Prompt dispatch and context
   reporting share this resolver, so they cannot select different fallback
-  identities. Valid explicit selections and aliases are unchanged.
+  identities. Valid explicit selections and aliases are unchanged. Desktop 4.0
+  also stores credentials as `enc:v2:os:<key fingerprint>:<iv>.<tag>.<data>`.
+  `CodingPlanHost` reads the 32-byte key from the macOS
+  `ZCode Credential Encryption` generic-password entry whose account is the
+  SHA-256 hex of the resolved credentials path, validates the embedded key
+  fingerprint, and decrypts only in memory. Without this path Desktop shows
+  models while the bb-launched CLI has an empty catalog and no plan binding.
+  Keychain errors use sanitized account errors; secrets never enter logs or
+  plugin settings.
 
 ## Translation rules
 

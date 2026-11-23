@@ -73,6 +73,14 @@ model, while valid explicit and context-budget selections retain their IDs.
 bridge, resume, background, Coding Plan and extension checks. This is loopback
 verification; a new paid production-inference request was not performed.
 
+Desktop 4.0 also pins `credential-source` to `os` and encrypts saved logins as
+`enc:v2:os`. Before support was added, Desktop showed its models while the
+plugin's native snapshot had `available: []` and no plan binding. A focused
+Keychain regression failed before implementation; afterward the real MacBook
+path verified `GLM Coding Max` with native `GLM-5.3` and `GLM-5.3-Flash`. The
+key is read from macOS Keychain into memory and is never logged or copied into
+plugin settings.
+
 ## Versions and contracts
 
 | Component                           | Verified version          |
